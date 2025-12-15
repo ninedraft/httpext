@@ -156,6 +156,22 @@ func TestResponseWriterInterceptor(t *testing.T) {
 		require.Same(t, rec, rw.Unwrap(), "unwrap returns underlying writer")
 		require.True(t, rw.IsUnwrapped, "unwrap toggles flag")
 	})
+
+	t.Run("new response controller unwraps original writer", func(t *testing.T) {
+		spy := &responseControllerSpy{ResponseWriter: httptest.NewRecorder()}
+		rw := &ResponseWriterInterceptor{ResponseWriter: spy}
+
+		controller := http.NewResponseController(rw)
+		require.NotNil(t, controller, "response controller is constructed")
+
+		require.NoError(t, controller.Flush(), "flush is delegated to the original writer")
+		require.True(t, spy.flushCalled, "flush hits the original writer")
+
+		require.NoError(t, controller.EnableFullDuplex(), "full duplex is delegated to the original writer")
+		require.True(t, spy.enableFullDuplexCalled, "full duplex hits the original writer")
+
+		require.True(t, rw.IsUnwrapped, "creating controller unwraps the interceptor per http doc")
+	})
 }
 
 func bufLog() (*slog.Logger, *bytes.Buffer) {
@@ -182,4 +198,24 @@ func handler(pattern string, status int, body string, header http.Header) http.H
 		})
 
 	return mux
+}
+
+type responseControllerSpy struct {
+	http.ResponseWriter
+
+	flushCalled            bool
+	enableFullDuplexCalled bool
+}
+
+func (spy *responseControllerSpy) Flush() {
+	spy.flushCalled = true
+
+	if flusher, ok := spy.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (spy *responseControllerSpy) EnableFullDuplex() error {
+	spy.enableFullDuplexCalled = true
+	return nil
 }
