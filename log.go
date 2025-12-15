@@ -1,0 +1,109 @@
+package httpext
+
+import (
+	"cmp"
+	"log/slog"
+	"net/http"
+	"runtime/debug"
+	"slices"
+	"time"
+)
+
+func Log(log *slog.Logger, allowedHeaders ...string) Middleware {
+	headerAllowset := setOf(allowedHeaders)
+
+	return func(next http.Handler) http.Handler {
+		handle := func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+
+			response := &ResponseWriterInterceptor{ResponseWriter: w}
+
+			panicked := true
+			tick := time.Now()
+			defer func() {
+				dt := time.Since(tick)
+
+				entry := log.InfoContext
+				if panicked || response.StatusCode/100 == 5 {
+					response.StatusCode = cmp.Or(response.StatusCode, http.StatusInternalServerError)
+					entry = log.ErrorContext
+
+					entry(ctx, "!!PANIC!!",
+						slog.String("stack", string(debug.Stack())))
+				}
+
+				entry(ctx, "http handler",
+					slog.GroupAttrs("request",
+						slog.String("method", r.Method),
+						slog.String("pattern", r.Pattern),
+						slog.String("host", r.Host),
+						slog.String("uri", r.RequestURI),
+						slog.String("from", r.RemoteAddr),
+					),
+					slog.GroupAttrs("response",
+						slog.Duration("duration", dt),
+						slog.Bool("panic", panicked),
+						slog.Int("status", response.StatusCode),
+						slog.Int64("body_size", response.Written),
+						slog.Any("header", filterHeader(response.Header(), headerAllowset))),
+				)
+			}()
+
+			next.ServeHTTP(response, r)
+
+			panicked = false
+		}
+
+		return http.HandlerFunc(handle)
+	}
+}
+
+func setOf[E comparable](items []E) map[E]struct{} {
+	set := make(map[E]struct{}, len(items))
+
+	for _, item := range items {
+		set[item] = struct{}{}
+	}
+
+	return set
+}
+
+func filterHeader(header http.Header, set map[string]struct{}) http.Header {
+	safe := make(http.Header, len(header))
+
+	for key := range set {
+		safe[key] = slices.Clone(header[key])
+	}
+
+	return safe
+}
+
+type ResponseWriterInterceptor struct {
+	http.ResponseWriter
+
+	StatusCode  int
+	Written     int64
+	IsUnwrapped bool
+}
+
+func (rw *ResponseWriterInterceptor) Unwrap() http.ResponseWriter {
+	rw.IsUnwrapped = true
+	return rw.ResponseWriter
+}
+
+func (rw *ResponseWriterInterceptor) WriteHeader(status int) {
+	rw.ResponseWriter.WriteHeader(status)
+
+	rw.StatusCode = status
+}
+
+func (rw *ResponseWriterInterceptor) Write(p []byte) (int, error) {
+	if rw.StatusCode == 0 {
+		rw.WriteHeader(200)
+	}
+
+	n, err := rw.ResponseWriter.Write(p)
+	rw.Written += int64(n)
+
+	return n, err
+}
