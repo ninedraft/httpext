@@ -3,6 +3,7 @@ package httpext
 import (
 	"net/http"
 	"slices"
+	"time"
 )
 
 type Middleware = func(next http.Handler) http.Handler
@@ -50,4 +51,18 @@ func (mux *Mux) Handle(pattern string, handler http.Handler, middlewares ...Midd
 		Pattern: pattern,
 		Handler: handler,
 	})
+}
+
+func Timeout(timeout time.Duration, message string) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.TimeoutHandler(next, timeout, message)
+	}
+}
+
+func MaxBytes(maxBytes int64) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.MaxBytesHandler(next, maxBytes)
+		})
+	}
 }
