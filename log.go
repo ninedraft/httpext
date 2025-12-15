@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func Log(log *slog.Logger, allowedHeaders ...string) Middleware {
+func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 	headerAllowset := setOf(allowedHeaders)
 
 	return func(next http.Handler) http.Handler {

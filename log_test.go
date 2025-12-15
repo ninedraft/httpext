@@ -26,7 +26,7 @@ func TestLog_Ok(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 		handle := handler("/test", 200, body, nil)
 
-		With(handle, Log(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
 		require.Containsf(t, logBuf.String(), "panic=false", "logs")
@@ -41,7 +41,7 @@ func TestLog_Ok(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 		handle := handler("/test", 0, body, nil)
 
-		With(handle, Log(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
 		require.NotEmptyf(t, logBuf.String(), "logs")
@@ -59,7 +59,7 @@ func TestLog_Ok(t *testing.T) {
 		}
 		handle := handler("/test", 200, body, header)
 
-		With(handle, Log(log, "X-Test")).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, "X-Test")).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
 		require.Containsf(t, logBuf.String(), "X-Test", "logs contains header values")
@@ -79,7 +79,7 @@ func TestLog_Ok(t *testing.T) {
 		}
 		handle := handler("/test", 200, body, header)
 
-		With(handle, Log(log, "X-Test")).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, "X-Test")).ServeHTTP(rw, req)
 
 		require.Containsf(t, logBuf.String(), "X-Test", "allowed header name is logged")
 		require.NotContainsf(t, logBuf.String(), "X-Secret", "disallowed header is filtered out")
@@ -101,7 +101,7 @@ func TestLog_panic(t *testing.T) {
 	}
 
 	require.Panics(t, func() {
-		With(handle, Log(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
 	}, "handler panics")
 
 	t.Log(logBuf)
@@ -119,7 +119,7 @@ func TestLog_ServerError(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 	handle := handler("/test", http.StatusServiceUnavailable, body, nil)
 
-	With(handle, Log(log)).ServeHTTP(rw, req)
+	With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
 
 	logs := logBuf.String()
 	require.Contains(t, logs, "level=ERROR", "server errors are logged on error level")
