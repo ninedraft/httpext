@@ -2,18 +2,26 @@ package httpext
 
 import (
 	"net/http"
+	"path"
 	"slices"
+	"strings"
 	"time"
 )
 
 type Middleware = func(next http.Handler) http.Handler
 
 func With(handler http.Handler, middlewares ...Middleware) http.Handler {
-	for _, wrap := range slices.Backward(middlewares) {
-		handler = wrap(handler)
+	return with(handler, middlewares)
+}
+
+func with(handler http.Handler, middlewares ...[]Middleware) http.Handler {
+	for _, stack := range slices.Backward(middlewares) {
+		for _, wrap := range slices.Backward(stack) {
+			handler = wrap(handler)
+		}
 	}
 
-	return handler
+	return nil
 }
 
 type Mux struct {
@@ -45,6 +53,8 @@ func NewMux(middlewares ...Middleware) *Mux {
 func (mux *Mux) HandleFunc(pattern string, handler http.HandlerFunc, middlewares ...Middleware) {
 	pattern = mux.spliceGroup(pattern)
 
+	handler = with(handler, mux.Middlewares, middlewares).ServeHTTP
+
 	mux.ServeMux.HandleFunc(pattern, handler)
 	mux.Routes = append(mux.Routes, MuxRoute{
 		Pattern: pattern,
@@ -53,7 +63,9 @@ func (mux *Mux) HandleFunc(pattern string, handler http.HandlerFunc, middlewares
 }
 
 func (mux *Mux) Handle(pattern string, handler http.Handler, middlewares ...Middleware) {
-	handler = With(handler, middlewares...)
+	pattern = mux.spliceGroup(pattern)
+
+	handler = with(handler, mux.Middlewares, middlewares)
 
 	mux.ServeMux.Handle(pattern, handler)
 	mux.Routes = append(mux.Routes, MuxRoute{
@@ -114,6 +126,7 @@ func MaxBytes(maxBytes int64) Middleware {
 		})
 	}
 }
+
 func Middlewares(middlewares ...Middleware) Middleware {
 	return func(next http.Handler) http.Handler {
 		return With(next, middlewares...)
