@@ -95,6 +95,23 @@ func TestLog_Ok(t *testing.T) {
 		require.NotContainsf(t, logBuf.String(), "X-Secret", "disallowed header is filtered out")
 		require.NotContainsf(t, logBuf.String(), "top-secret", "disallowed header values are filtered out")
 	})
+
+	t.Run("defaults status when handler silent", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest(http.MethodGet, "/test", strings.NewReader(body))
+		handle := handler("/test", 0, "", nil)
+
+		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+
+		logs := logBuf.String()
+		require.Contains(t, logs, "status=200", "default success status is logged")
+	})
 }
 
 func TestLog_panic(t *testing.T) {

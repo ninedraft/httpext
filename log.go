@@ -33,6 +33,8 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 
 				if panicked {
 					response.StatusCode = cmp.Or(response.StatusCode, http.StatusInternalServerError)
+					Error(w, http.StatusInternalServerError)
+
 					entry = log.ErrorContext
 
 					entry(ctx, "!!PANIC!!",
@@ -60,6 +62,11 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 			next.ServeHTTP(response, r)
 
 			panicked = false
+
+			// handler don't call .Write or .WriteHeader
+			if response.StatusCode == 0 {
+				response.StatusCode = 200
+			}
 		}
 
 		return http.HandlerFunc(handle)
@@ -106,7 +113,9 @@ func (rw *ResponseWriterInterceptor) Unwrap() http.ResponseWriter {
 func (rw *ResponseWriterInterceptor) WriteHeader(status int) {
 	rw.ResponseWriter.WriteHeader(status)
 
-	rw.StatusCode = status
+	if rw.StatusCode == 0 {
+		rw.StatusCode = status
+	}
 }
 
 func (rw *ResponseWriterInterceptor) Write(p []byte) (int, error) {
