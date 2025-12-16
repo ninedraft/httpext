@@ -21,7 +21,7 @@ func with(handler http.Handler, middlewares ...[]Middleware) http.Handler {
 		}
 	}
 
-	return nil
+	return handler
 }
 
 type Mux struct {
