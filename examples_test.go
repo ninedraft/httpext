@@ -44,6 +44,36 @@ func ExampleResponseWriterInterceptor() {
 	// Output: 200
 }
 
+func ExampleMux_Group() {
+	mux := httpext.NewMux()
+
+	{
+		group := mux.Group("/users/{user}")
+
+		group.HandleFunc("GET /", hello)
+		group.HandleFunc("POST /", hello)
+		group.HandleFunc("DELETE /", hello)
+	}
+
+	{
+		group := mux.Group("playlists")
+
+		group.HandleFunc("GET /", hello)
+		group.HandleFunc("GET /{playlist}", hello)
+	}
+
+	for _, route := range mux.Routes() {
+		fmt.Println(route.Pattern)
+	}
+
+	// Output:
+	// GET /users/{user}/
+	// POST /users/{user}/
+	// DELETE /users/{user}/
+	// GET /playlists/
+	// GET /playlists/{playlist}
+}
+
 func hello(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("hello"))
 }
