@@ -100,9 +100,9 @@ func TestLog_panic(t *testing.T) {
 		panic("test")
 	}
 
-	require.Panics(t, func() {
+	require.NotPanicsf(t, func() {
 		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
-	}, "handler panics")
+	}, "handler")
 
 	t.Log(logBuf)
 	require.Containsf(t, logBuf.String(), "panic=true", "logs")

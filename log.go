@@ -29,6 +29,7 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 					entry = log.ErrorContext
 
 					entry(ctx, "!!PANIC!!",
+						slog.Any("recover", recover()),
 						slog.String("stack", string(debug.Stack())))
 				}
 
