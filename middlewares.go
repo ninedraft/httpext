@@ -19,6 +19,9 @@ func With(handler http.Handler, middlewares ...Middleware) http.Handler {
 func with(handler http.Handler, middlewares ...[]Middleware) http.Handler {
 	for _, stack := range slices.Backward(middlewares) {
 		for _, wrap := range slices.Backward(stack) {
+			if wrap == nil {
+				continue
+			}
 			handler = wrap(handler)
 		}
 	}
