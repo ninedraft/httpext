@@ -27,7 +27,11 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 				dt := time.Since(tick)
 
 				entry := log.InfoContext
-				if panicked || response.StatusCode/100 == 5 {
+				if response.StatusCode/100 == 5 {
+					entry = log.ErrorContext
+				}
+
+				if panicked {
 					response.StatusCode = cmp.Or(response.StatusCode, http.StatusInternalServerError)
 					entry = log.ErrorContext
 
