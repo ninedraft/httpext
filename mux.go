@@ -33,8 +33,7 @@ func NewMux(middlewares ...Middleware) *Mux {
 	}
 }
 
-func (mux *Mux) HandlFunc(pattern string, handler http.HandlerFunc, middlewares ...Middleware) {
-	handler = With(handler, middlewares...).ServeHTTP
+func (mux *Mux) HandleFunc(pattern string, handler http.HandlerFunc, middlewares ...Middleware) {
 
 	mux.ServeMux.HandleFunc(pattern, handler)
 	mux.Routes = append(mux.Routes, MuxRoute{

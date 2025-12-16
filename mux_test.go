@@ -44,7 +44,7 @@ func TestMux_HandleFunc(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, pattern, nil)
 
 	var middlewareCalled bool
-	mux.HandlFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	}, flagMiddleware(&middlewareCalled))
 
