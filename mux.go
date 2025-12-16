@@ -66,3 +66,8 @@ func MaxBytes(maxBytes int64) Middleware {
 		})
 	}
 }
+func Middlewares(middlewares ...Middleware) Middleware {
+	return func(next http.Handler) http.Handler {
+		return With(next, middlewares...)
+	}
+}
