@@ -35,7 +35,21 @@ type Mux struct {
 
 // using embedded pointer to enable mutable sharing of Routes between parent and child mux groups.
 type routes struct {
-	Routes []MuxRoute
+	routes []MuxRoute
+}
+
+// Routes returnes list of registered mux routes.
+// It's shared between all parent and child Mux groups.
+// Handler in each returned route is wrapped with base Mux and per-handle and per-group middlewares.
+// Result can be used for documentation and debug purposes.
+// Also you can feed routes into other httpext.Mux or http.ServeMux to construct an equal router.
+//
+//	other := http.NewServeMux()
+//	for _, route := range mux.Routes() {
+//		other.Handle(route.Pattern, route.Handler)
+//	}
+func (r *routes) Routes() []MuxRoute {
+	return r.routes
 }
 
 type MuxRoute struct {
@@ -57,7 +71,7 @@ func (mux *Mux) HandleFunc(pattern string, handler http.HandlerFunc, middlewares
 	handler = with(handler, mux.Middlewares, middlewares).ServeHTTP
 
 	mux.ServeMux.HandleFunc(pattern, handler)
-	mux.Routes = append(mux.Routes, MuxRoute{
+	mux.routes.routes = append(mux.routes.routes, MuxRoute{
 		Pattern: pattern,
 		Handler: handler,
 	})
@@ -69,7 +83,7 @@ func (mux *Mux) Handle(pattern string, handler http.Handler, middlewares ...Midd
 	handler = with(handler, mux.Middlewares, middlewares)
 
 	mux.ServeMux.Handle(pattern, handler)
-	mux.Routes = append(mux.Routes, MuxRoute{
+	mux.routes.routes = append(mux.routes.routes, MuxRoute{
 		Pattern: pattern,
 		Handler: handler,
 	})

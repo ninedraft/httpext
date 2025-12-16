@@ -53,10 +53,10 @@ func TestMux_HandleFunc(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, rec.Code, "handler response")
 	require.True(t, middlewareCalled, "middleware is invoked")
 	require.Len(t, mux.Routes, 1, "single route registered")
-	require.Equal(t, pattern, mux.Routes[0].Pattern, "pattern stored")
+	require.Equal(t, pattern, mux.Routes()[0].Pattern, "pattern stored")
 
 	routeRec := httptest.NewRecorder()
-	mux.Routes[0].Handler.ServeHTTP(routeRec, req)
+	mux.Routes()[0].Handler.ServeHTTP(routeRec, req)
 	require.Equal(t, http.StatusAccepted, routeRec.Code, "route handler contains middleware chain")
 }
 
@@ -80,7 +80,7 @@ func TestMux_Handle(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, "handler response")
 	require.True(t, middlewareCalled, "middleware is invoked")
 	require.Len(t, mux.Routes, 1, "single route registered")
-	require.Equal(t, pattern, mux.Routes[0].Pattern, "pattern stored")
+	require.Equal(t, pattern, mux.Routes()[0].Pattern, "pattern stored")
 }
 
 func recordingMiddleware(events *[]string, label string) Middleware {
@@ -152,7 +152,7 @@ func TestMux_GroupSplicesPatterns(t *testing.T) {
 			group.HandleFunc(tt.pattern, func(w http.ResponseWriter, r *http.Request) {})
 
 			require.Len(t, mux.Routes, 1)
-			require.Equal(t, tt.want, mux.Routes[0].Pattern)
+			require.Equal(t, tt.want, mux.Routes()[0].Pattern)
 		})
 	}
 
@@ -163,7 +163,7 @@ func TestMux_GroupSplicesPatterns(t *testing.T) {
 		group.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {})
 
 		require.Len(t, mux.Routes, 1)
-		require.Equal(t, "/api/v1/users", mux.Routes[0].Pattern)
+		require.Equal(t, "/api/v1/users", mux.Routes()[0].Pattern)
 	})
 }
 
