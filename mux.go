@@ -1,6 +1,7 @@
 package httpext
 
 import (
+	"cmp"
 	"net/http"
 	"path"
 	"slices"
@@ -88,15 +89,13 @@ func (mux *Mux) Handle(pattern string, handler http.Handler, middlewares ...Midd
 //	POST /a/b            -> POST /prefix/a/b
 //	POST example.com/a/b -> POST example.com/prefix/a/b
 func (mux *Mux) Group(prefix string, middlewares ...Middleware) *Mux {
-	if !strings.HasSuffix(prefix, "/") {
-		prefix = prefix + "/"
-	}
 	if !strings.HasPrefix(prefix, "/") {
 		prefix = "/" + prefix
 	}
 
+	prefix = path.Join(mux.group, prefix) + "/"
 	return &Mux{
-		group:       path.Join(mux.group, prefix),
+		group:       prefix,
 		ServeMux:    mux.ServeMux,
 		Middlewares: slices.Concat(mux.Middlewares, middlewares),
 		routes:      mux.routes,
@@ -106,11 +105,13 @@ func (mux *Mux) Group(prefix string, middlewares ...Middleware) *Mux {
 func (mux *Mux) spliceGroup(pattern string) string {
 	head, path, ok := strings.Cut(pattern, "/")
 	if !ok {
-		// something wrong, let net/http handle this
+		// something wrong, let's net/http handle thi
 		return pattern
 	}
 
-	return head + mux.group + path
+	group := cmp.Or(mux.group, "/")
+
+	return head + group + path
 }
 
 func Timeout(timeout time.Duration, message string) Middleware {
