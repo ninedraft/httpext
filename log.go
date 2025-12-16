@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// LogWithRecover logs request and response data into provided slog instance.
+// Additionally it logs response headers from provided allowlist.
+// It tries to recover panics from handler and logs the as errors with stack and recover value.
 func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 	headerAllowset := setOf(allowedHeaders)
 
@@ -79,11 +82,15 @@ func filterHeader(header http.Header, set map[string]struct{}) http.Header {
 	return safe
 }
 
+// ResponseWriterInterceptor allows to spy on http handler
+// by catching result status code, response body size, etc.
+// It's compatible with http.http.NewResponseController
 type ResponseWriterInterceptor struct {
 	http.ResponseWriter
 
-	StatusCode  int
-	Written     int64
+	StatusCode int
+	Written    int64
+	// true means that http.NewResponseController was used in the handler
 	IsUnwrapped bool
 }
 

@@ -1,8 +1,10 @@
 package httpext_test
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"github.com/ninedraft/httpext"
@@ -21,6 +23,25 @@ func ExampleMiddlewares() {
 		base, httpext.Timeout(time.Second, "too complex query"))
 
 	// Output:
+}
+
+func ExampleResponseWriterInterceptor() {
+	mw := func(next http.Handler) http.Handler {
+		handle := func(w http.ResponseWriter, r *http.Request) {
+			rw := &httpext.ResponseWriterInterceptor{ResponseWriter: w}
+
+			next.ServeHTTP(rw, r)
+			fmt.Println(rw.StatusCode)
+		}
+
+		return http.HandlerFunc(handle)
+	}
+
+	mw(http.HandlerFunc(hello)).ServeHTTP(
+		httptest.NewRecorder(),
+		httptest.NewRequest("GET", "/hello", nil))
+
+	// Output: 200
 }
 
 func hello(w http.ResponseWriter, r *http.Request) {
