@@ -10,6 +10,8 @@ import (
 )
 
 func TestWith_Order(t *testing.T) {
+	t.Parallel()
+
 	var events []string
 
 	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -36,6 +38,8 @@ func TestWith_Order(t *testing.T) {
 }
 
 func TestMux_HandleFunc(t *testing.T) {
+	t.Parallel()
+
 	const pattern = "/func"
 
 	mux := NewMux()
@@ -61,6 +65,8 @@ func TestMux_HandleFunc(t *testing.T) {
 }
 
 func TestMux_Handle(t *testing.T) {
+	t.Parallel()
+
 	const pattern = "/handler"
 
 	mux := NewMux()
@@ -168,6 +174,8 @@ func TestMux_GroupSplicesPatterns(t *testing.T) {
 }
 
 func TestMux_GroupMiddlewares(t *testing.T) {
+	t.Parallel()
+
 	var events []string
 
 	mux := NewMux(recordingMiddleware(&events, "root"))

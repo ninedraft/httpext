@@ -15,9 +15,13 @@ import (
 )
 
 func TestLog_Ok(t *testing.T) {
+	t.Parallel()
+
 	const body = "test body"
 
 	t.Run("write header", func(t *testing.T) {
+		t.Parallel()
+
 		log, logBuf := bufLog()
 
 		rw := httptest.NewRecorder()
@@ -33,6 +37,8 @@ func TestLog_Ok(t *testing.T) {
 	})
 
 	t.Run("no write header", func(t *testing.T) {
+		t.Parallel()
+
 		log, logBuf := bufLog()
 
 		rw := httptest.NewRecorder()
@@ -48,6 +54,8 @@ func TestLog_Ok(t *testing.T) {
 	})
 
 	t.Run("header", func(t *testing.T) {
+		t.Parallel()
+
 		log, logBuf := bufLog()
 
 		rw := httptest.NewRecorder()
@@ -67,6 +75,8 @@ func TestLog_Ok(t *testing.T) {
 	})
 
 	t.Run("header filtered", func(t *testing.T) {
+		t.Parallel()
+
 		log, logBuf := bufLog()
 
 		rw := httptest.NewRecorder()
@@ -88,6 +98,8 @@ func TestLog_Ok(t *testing.T) {
 }
 
 func TestLog_panic(t *testing.T) {
+	t.Parallel()
+
 	const body = "test body"
 
 	log, logBuf := bufLog()
@@ -109,6 +121,8 @@ func TestLog_panic(t *testing.T) {
 }
 
 func TestLog_ServerError(t *testing.T) {
+	t.Parallel()
+
 	const body = "test body"
 
 	log, logBuf := bufLog()
@@ -128,7 +142,11 @@ func TestLog_ServerError(t *testing.T) {
 }
 
 func TestResponseWriterInterceptor(t *testing.T) {
+	t.Parallel()
+
 	t.Run("write sets defaults", func(t *testing.T) {
+		t.Parallel()
+
 		rec := httptest.NewRecorder()
 		rw := &ResponseWriterInterceptor{ResponseWriter: rec}
 
@@ -141,6 +159,8 @@ func TestResponseWriterInterceptor(t *testing.T) {
 	})
 
 	t.Run("write header propagates status", func(t *testing.T) {
+		t.Parallel()
+
 		rec := httptest.NewRecorder()
 		rw := &ResponseWriterInterceptor{ResponseWriter: rec}
 
@@ -150,6 +170,8 @@ func TestResponseWriterInterceptor(t *testing.T) {
 	})
 
 	t.Run("unwrap marks flag", func(t *testing.T) {
+		t.Parallel()
+
 		rec := httptest.NewRecorder()
 		rw := &ResponseWriterInterceptor{ResponseWriter: rec}
 
@@ -158,6 +180,8 @@ func TestResponseWriterInterceptor(t *testing.T) {
 	})
 
 	t.Run("new response controller unwraps original writer", func(t *testing.T) {
+		t.Parallel()
+
 		spy := &responseControllerSpy{ResponseWriter: httptest.NewRecorder()}
 		rw := &ResponseWriterInterceptor{ResponseWriter: spy}
 
