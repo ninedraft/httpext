@@ -87,7 +87,7 @@ func filterHeader(header http.Header, set map[string]struct{}) http.Header {
 	safe := make(http.Header, len(header))
 
 	for key := range set {
-		safe[key] = slices.Clone(header[key])
+		safe[key] = slices.Clone(header.Values(key))
 	}
 
 	return safe
