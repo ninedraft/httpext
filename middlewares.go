@@ -49,8 +49,6 @@ func Timeout(timeout time.Duration, message string) Middleware {
 //	httpext.MaxBytesHandler(maxBytes)(handler) == http.MaxBytesHandler(handler, maxBytes)
 func MaxBytes(maxBytes int64) Middleware {
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.MaxBytesHandler(next, maxBytes)
-		})
+		return http.MaxBytesHandler(next, maxBytes)
 	}
 }
