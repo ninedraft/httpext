@@ -6,5 +6,5 @@ import "net/http"
 //
 //	Error(w, http.StatusNotFound) = http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 func Error(w http.ResponseWriter, status int) {
-	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+	http.Error(w, http.StatusText(status), status)
 }
