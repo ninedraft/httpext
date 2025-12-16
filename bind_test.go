@@ -1,147 +1,141 @@
-package httpext_test
+package httpext
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	. "github.com/ninedraft/httpext"
 	"github.com/stretchr/testify/require"
 )
 
-func TestBindValidate_BindsAllSources(t *testing.T) {
+func TestBinderQueryBindsBasicTypes(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com/items?q=answer&count=7", nil)
+
+	binder := newTestBinder(req)
+
+	var (
+		query string
+		count int
+	)
+
+	binder.Query("q", &query).Query("count", &count)
+
+	require.Equal(t, "answer", query)
+	require.Equal(t, 7, count)
+	require.NoError(t, binder.Err())
+}
+
+func TestBinderHeaderAndPathBinding(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/items/42", nil)
 	req.Header.Set("X-Token", "secret")
 	req.SetPathValue("id", "42")
-	req.Pattern = "/items/{id}"
 
-	target := &bindValidator{}
-	err := BindValidate(req, target)
+	binder := newTestBinder(req)
 
-	require.NoError(t, err)
-	require.Equal(t, "answer", target.Query)
-	require.Equal(t, 7, target.Count)
-	require.Equal(t, "secret", target.Token)
-	require.Equal(t, 42, target.ID)
-	require.True(t, target.validated, "validate hook is executed")
+	var (
+		token string
+		id    int
+	)
+
+	binder.Header("X-Token", &token).Path("id", &id)
+
+	require.Equal(t, "secret", token)
+	require.Equal(t, 42, id)
+	require.NoError(t, binder.Err())
 }
 
-func TestBindValidate_ReturnsQueryScanError(t *testing.T) {
+func TestBinderQueryReportsMissingSource(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/items", nil)
+	binder := newTestBinder(req)
+
+	var query string
+	binder.Query("q", &query)
+
+	err := binder.Err()
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrBindingMissing)
+	require.Contains(t, err.Error(), `query "q"`)
+}
+
+func TestBinderQueryReportsScanError(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com/items?count=bad", nil)
-	target := &bindValidator{}
+	binder := newTestBinder(req)
 
-	err := BindValidate(req, target)
+	var count int
+	binder.Query("count", &count)
 
+	err := binder.Err()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "scanning query \"count\"")
-	require.False(t, target.validated, "validate is skipped when binding fails")
+	require.Contains(t, err.Error(), `query "count"`)
 }
 
-func TestBindValidate_ReturnsHeaderScanError(t *testing.T) {
+func TestBinderHeaderReportsMissingSource(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com/items", nil)
-	req.Header.Set("X-Limit", "boom")
+	binder := newTestBinder(req)
 
-	target := &headerValidator{}
-	err := BindValidate(req, target)
+	var token string
+	binder.Header("X-Token", &token)
 
+	err := binder.Err()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "scanning header \"X-Limit\"")
-	require.False(t, target.validated, "validate is skipped when binding fails")
+	require.ErrorIs(t, err, ErrBindingMissing)
+	require.Contains(t, err.Error(), `header "X-Token"`)
 }
 
-func TestBindValidate_BindsPathValuesWithoutHeaderTags(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com/items/13", nil)
-	req.SetPathValue("id", "13")
-	req.Pattern = "/items/{id}"
-
-	target := &pathValidator{}
-	err := BindValidate(req, target)
-
-	require.NoError(t, err)
-	require.Equal(t, 13, target.ID)
-	require.True(t, target.validated)
-}
-
-func TestBindValidate_PathRequiresPatternPlaceholder(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com/items", nil)
-	req.SetPathValue("id", "44")
-	req.Pattern = "/items"
-
-	target := &pathValidator{}
-	err := BindValidate(req, target)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrMissingPatternValue)
-	require.False(t, target.validated)
-}
-
-func TestBindValidate_PathValueScanError(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com/items", nil)
+func TestBinderPathReportsInvalidValue(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/items/abc", nil)
 	req.SetPathValue("id", "abc")
-	req.Pattern = "/items/{id}"
+	binder := newTestBinder(req)
 
-	target := &pathValidator{}
-	err := BindValidate(req, target)
+	var id int
+	binder.Path("id", &id)
 
+	err := binder.Err()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "scanning path value \"id\"")
-	require.False(t, target.validated)
+	require.Contains(t, err.Error(), `path value "id"`)
 }
 
-func TestBindValidate_PanicsOnNilTarget(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com/items", nil)
+func TestBinderSupportsTextUnmarshalers(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/items?value=payload", nil)
+	binder := newTestBinder(req)
 
-	require.Panics(t, func() {
-		BindValidate(req, (*bindValidator)(nil))
-	})
+	var value upperText
+	binder.Query("value", &value)
+
+	require.Equal(t, upperText("PAYLOAD"), value)
+	require.NoError(t, binder.Err())
 }
 
-func TestBindValidate_PanicsOnNonPointerTarget(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com/items", nil)
-	target := valueValidator{}
+func TestBinderErrJoinsMultipleErrors(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/items?count=bad", nil)
+	req.Header.Set("X-Retry", "boom")
 
-	require.Panics(t, func() {
-		BindValidate(req, target)
-	})
+	binder := newTestBinder(req)
+
+	var (
+		missing string
+		retry   int
+	)
+
+	binder.Query("missing", &missing).Header("X-Retry", &retry)
+
+	err := binder.Err()
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrBindingMissing)
+	require.Contains(t, err.Error(), `header "X-Retry"`)
 }
 
-type bindValidator struct {
-	Query string `query:"q"`
-	Count int    `query:"count"`
-	Token string `header:"X-Token"`
-	ID    int    `path:"id"`
-
-	validated bool
+func newTestBinder(req *http.Request) *Binder {
+	return &Binder{
+		req:   req,
+		query: req.URL.Query(),
+	}
 }
 
-func (t *bindValidator) Validate() error {
-	t.validated = true
+type upperText string
+
+func (u *upperText) UnmarshalText(text []byte) error {
+	*u = upperText(strings.ToUpper(string(text)))
 	return nil
 }
-
-type headerValidator struct {
-	Limit int `header:"X-Limit"`
-
-	validated bool
-}
-
-func (t *headerValidator) Validate() error {
-	t.validated = true
-	return nil
-}
-
-type pathValidator struct {
-	ID int `path:"id"`
-
-	validated bool
-}
-
-func (t *pathValidator) Validate() error {
-	t.validated = true
-	return nil
-}
-
-type valueValidator struct {
-	Field string `query:"field"`
-}
-
-func (valueValidator) Validate() error { return nil }

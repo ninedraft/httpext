@@ -1,112 +1,122 @@
 package httpext
 
 import (
+	"encoding"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
-	"strings"
 )
 
-type validator interface {
-	Validate() error
+var ErrBindingMissing = errors.New("missing binding source")
+
+type Binder struct {
+	req   *http.Request
+	query url.Values
+	errs  []error
 }
 
-func BindValidate(req *http.Request, dst validator) error {
-	v := reflect.ValueOf(dst)
-	if v.Kind() != reflect.Pointer {
-		panic("[BindValidate] a non-nil struct pointer is expected as target")
-	}
-	if v.IsNil() {
-		panic("[BindValidate] a non-nil struct pointer is expected as target")
-	}
-	v = v.Elem()
+func (binder *Binder) Err() error {
+	return errors.Join(binder.errs...)
+}
 
-	if err := bind(req, v); err != nil {
+func (binder *Binder) Query(key string, dst any) *Binder {
+	if !binder.query.Has(key) {
+		err := fmt.Errorf("%w query %q", ErrBindingMissing, key)
+		binder.errs = append(binder.errs, err)
+	}
+
+	if err := bindValues(binder.query[key], dst); err != nil {
+		err := fmt.Errorf("%w: query %q", err, key)
+		binder.errs = append(binder.errs, err)
+	}
+
+	return binder
+}
+
+func (binder *Binder) Header(key string, dst any) *Binder {
+	if binder.req.Header.Get(key) == "" {
+		err := fmt.Errorf("%w header %q", ErrBindingMissing, key)
+		binder.errs = append(binder.errs, err)
+	}
+
+	if err := bindValues(binder.req.Header.Values(key), dst); err != nil {
+		err := fmt.Errorf("%w: header %q", err, key)
+		binder.errs = append(binder.errs, err)
+	}
+
+	return binder
+}
+
+func (binder *Binder) Path(key string, dst any) *Binder {
+	values := []string{binder.req.PathValue(key)}
+
+	if err := bindValues(values, dst); err != nil {
+		err := fmt.Errorf("%w: path value %q", err, key)
+		binder.errs = append(binder.errs, err)
+	}
+
+	return binder
+}
+
+var errNovalues = errors.New("no values")
+
+func bindValues(values []string, dst any) error {
+	if len(values) == 0 {
+		return errNovalues
+	}
+
+	bindSingle := func(values []string, dst any) error {
+		_, err := fmt.Sscan(values[0], dst)
 		return err
 	}
 
-	return dst.Validate()
-}
-
-func bind(req *http.Request, dst reflect.Value) error {
-	query := req.URL.Query()
-	header := req.Header
-
-	var errs []error
-
-	dstT := dst.Type()
-	for i := range dst.NumField() {
-		field := dst.Field(i)
-		fieldT := dstT.Field(i)
-
-		if !fieldT.IsExported() || !field.CanAddr() {
-			continue
-		}
-
-		fieldDst := field.Addr().Interface()
-
-		tagQuery, ok := fieldT.Tag.Lookup("query")
-		if ok {
-			key := strings.TrimSpace(tagQuery)
-			errs = append(errs, bindQuery(query, fieldDst, key))
-		}
-
-		tagHeader, ok := fieldT.Tag.Lookup("header")
-		if ok {
-			key := strings.TrimSpace(tagHeader)
-			errs = append(errs, bindHeader(header, fieldDst, key))
-		}
-
-		if tagPathValue, ok := fieldT.Tag.Lookup("path"); ok {
-			key := strings.TrimSpace(tagPathValue)
-			errs = append(errs, bindPathValue(req, fieldDst, key))
+	if tum, ok := dst.(encoding.TextUnmarshaler); ok {
+		bindSingle = func(values []string, dst any) error {
+			return tum.UnmarshalText([]byte(values[0]))
 		}
 	}
 
-	return errors.Join(errs...)
+	bind := bindSingle
+
+	if isSlicePtr(dst) {
+		bind = func(values []string, dst any) error {
+			slice := reflect.ValueOf(dst).Elem()
+			slice.SetLen(0)
+
+			for i := range values {
+				value := reflect.Zero(slice.Type().Elem())
+				err := bindSingle(values[i:i+1], value.Addr())
+				if err != nil {
+					return fmt.Errorf("slice [%v]: %w", i, err)
+				}
+
+				slice = reflect.Append(slice, value)
+			}
+
+			return nil
+		}
+	}
+
+	return bind(values, dst)
 }
 
-func bindQuery(query url.Values, dst any, key string) error {
-	if !query.Has(key) {
-		return nil
+func isSlicePtr(v any) bool {
+	vt := reflect.TypeOf(v)
+	if vt.Kind() != reflect.Pointer {
+		return false
 	}
 
-	_, err := fmt.Sscan(query.Get(key), dst)
-	if err != nil {
-		return fmt.Errorf("scanning query %q: %w", key, err)
+	vt = vt.Elem()
+	if vt.Kind() != reflect.Slice {
+		return false
 	}
 
-	return err
-}
-
-func bindHeader(header http.Header, dst any, key string) error {
-	values := header.Values(key)
-	if len(values) == 0 {
-		return nil
+	if vt.Elem().Kind() == reflect.Int8 {
+		// []byte, special case
+		return false
 	}
 
-	_, err := fmt.Sscan(values[0], dst)
-	if err != nil {
-		return fmt.Errorf("scanning header %q: %w", key, err)
-	}
-
-	return err
-}
-
-var ErrMissingPatternValue = errors.New("pattern doesn't contain key")
-
-func bindPathValue(req *http.Request, dst any, key string) error {
-	if !strings.Contains(req.Pattern, "{"+key+"}") &&
-		!strings.Contains(req.Pattern, "{"+key+"...}") {
-		return fmt.Errorf("%w %q", ErrMissingPatternValue, key)
-	}
-
-	_, err := fmt.Sscan(req.PathValue(key), dst)
-	if err != nil {
-		return fmt.Errorf("scanning path value %q: %w", key, err)
-	}
-
-	return err
+	return true
 }
