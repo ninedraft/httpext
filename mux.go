@@ -82,8 +82,6 @@ func (mux *Mux) Handle(pattern string, handler http.Handler, middlewares ...Midd
 //
 // It's valid to use "{pattern}" as a prefix.
 //
-// Examples:
-//
 //	/a/b                 -> /prefix/a/b
 //	POST /a/b            -> POST /prefix/a/b
 //	POST example.com/a/b -> POST example.com/prefix/a/b
