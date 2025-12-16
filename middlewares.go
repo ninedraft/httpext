@@ -1,7 +1,9 @@
 package httpext
 
 import (
+	"log/slog"
 	"net/http"
+	"net/netip"
 	"slices"
 	"time"
 )
@@ -52,5 +54,33 @@ func MaxBytes(maxBytes int64) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.MaxBytesHandler(next, maxBytes)
 		})
+	}
+}
+
+func OnlyLoopback(log *slog.Logger) Middleware {
+	return func(next http.Handler) http.Handler {
+		handle := func(w http.ResponseWriter, r *http.Request) {
+			addr, err := netip.ParseAddrPort(r.RemoteAddr)
+			if err != nil {
+				log.Warn("only-local parsing remote address", slog.GroupAttrs("request",
+					slog.String("error", err.Error()),
+					slog.String("from", r.RemoteAddr),
+				))
+				Error(w, http.StatusNotFound)
+				return
+			}
+
+			if !addr.Addr().IsLoopback() {
+				log.Warn("forbidden", slog.GroupAttrs("request",
+					slog.String("from", r.RemoteAddr),
+				))
+				Error(w, http.StatusNotFound)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		}
+
+		return http.HandlerFunc(handle)
 	}
 }
