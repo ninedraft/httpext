@@ -52,3 +52,11 @@ func MaxBytes(maxBytes int64) Middleware {
 		return http.MaxBytesHandler(next, maxBytes)
 	}
 }
+
+func MiddlewareNoop() Middleware {
+	return middlewareNoop
+}
+
+func middlewareNoop(next http.Handler) http.Handler {
+	return next
+}
