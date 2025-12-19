@@ -1,6 +1,7 @@
 package httpext
 
 import (
+	"bytes"
 	"cmp"
 	"log/slog"
 	"net/http"
@@ -103,6 +104,8 @@ type ResponseWriterInterceptor struct {
 	Written    int64
 	// true means that http.NewResponseController was used in the handler
 	IsUnwrapped bool
+
+	Body *bytes.Buffer
 }
 
 func (rw *ResponseWriterInterceptor) Unwrap() http.ResponseWriter {
@@ -121,6 +124,10 @@ func (rw *ResponseWriterInterceptor) WriteHeader(status int) {
 func (rw *ResponseWriterInterceptor) Write(p []byte) (int, error) {
 	if rw.StatusCode == 0 {
 		rw.WriteHeader(200)
+	}
+
+	if rw.Body != nil {
+		rw.Body.Write(p)
 	}
 
 	n, err := rw.ResponseWriter.Write(p)
