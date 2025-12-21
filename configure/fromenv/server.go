@@ -52,6 +52,8 @@ func ServerUsage(prefix string, defaults *http.Server) string {
 		defaults = &http.Server{}
 	}
 
+	protocols := httpint.Protocols(defaults)
+
 	readTimeoutKey := prefix + EnvServerReadTimeout
 
 	type entry struct {
@@ -108,17 +110,17 @@ func ServerUsage(prefix string, defaults *http.Server) string {
 		},
 		{
 			Key:         prefix + EnvServerProtocolHTTP1,
-			Value:       "true/false",
+			Value:       protocols.HTTP1(),
 			Description: "Enable HTTP1 to accept HTTP/1.0 and HTTP/1.1 connections (supported on both TLS and plain TCP).",
 		},
 		{
 			Key:         prefix + EnvServerProtocolHTTP2,
-			Value:       "true/false",
+			Value:       protocols.HTTP2(),
 			Description: "Enable HTTP2 to accept TLS-based HTTP/2 connections (requires the TLS ALPN protocol to select \"h2\").",
 		},
 		{
 			Key:         prefix + EnvServerProtocolUnencryptedHTTP2,
-			Value:       "true/false",
+			Value:       protocols.UnencryptedHTTP2(),
 			Description: "Enable UnencryptedHTTP2 to accept plain TCP HTTP/2 connections using the \"h2c\" upgrade path.",
 		},
 	}
