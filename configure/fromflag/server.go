@@ -56,7 +56,7 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 		})
 	}
 
-	flagProtocol("http1", protocols.SetHTTP2)
+	flagProtocol("http1", protocols.SetHTTP1)
 	flagProtocol("http2", protocols.SetHTTP2)
 	flagProtocol("unencrypted_http2", protocols.SetUnencryptedHTTP2)
 
