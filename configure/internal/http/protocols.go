@@ -9,9 +9,9 @@ import (
 // Adapted from go/src/net/http/server.go
 //
 // LICENSE.go BSD-3-Clause applies.
-func Protocols(srv *http.Server) http.Protocols {
+func Protocols(srv *http.Server) *http.Protocols {
 	if srv.Protocols != nil {
-		return *srv.Protocols // user-configured set
+		return srv.Protocols // user-configured set
 	}
 
 	// The historic way of disabling HTTP/2 is to set TLSNextProto to
@@ -23,7 +23,8 @@ func Protocols(srv *http.Server) http.Protocols {
 		http2Disabled = true
 	}
 
-	var protocols http.Protocols
+	protocols := &http.Protocols{}
+
 	protocols.SetHTTP1(true) // default always includes HTTP/1
 	if !http2Disabled {
 		protocols.SetHTTP2(true)

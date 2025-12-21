@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	httpint "github.com/ninedraft/httpext/configure/internal/http"
 )
 
 type LookupEnv = func(key string) (string, bool)
@@ -168,12 +170,8 @@ func Server(lookup LookupEnv, prefix string, srv *http.Server) (map[string]strin
 		return nil, err
 	}
 
-	protocols := &http.Protocols{}
-	if srv.Protocols != nil {
-		*protocols = *srv.Protocols
-	}
+	srv.Protocols = httpint.Protocols(srv)
 
-	protocolSet := false
 	setProto := func(key string, setFn func(bool)) error {
 		val, ok, err := parseValue(env, key, strconv.ParseBool)
 		if err != nil {
@@ -181,23 +179,18 @@ func Server(lookup LookupEnv, prefix string, srv *http.Server) (map[string]strin
 		}
 		if ok {
 			setFn(val)
-			protocolSet = true
 		}
 		return nil
 	}
 
-	if err := setProto(EnvServerProtocolHTTP1, protocols.SetHTTP1); err != nil {
+	if err := setProto(EnvServerProtocolHTTP1, srv.Protocols.SetHTTP1); err != nil {
 		return nil, err
 	}
-	if err := setProto(EnvServerProtocolHTTP2, protocols.SetHTTP2); err != nil {
+	if err := setProto(EnvServerProtocolHTTP2, srv.Protocols.SetHTTP2); err != nil {
 		return nil, err
 	}
-	if err := setProto(EnvServerProtocolUnencryptedHTTP2, protocols.SetUnencryptedHTTP2); err != nil {
+	if err := setProto(EnvServerProtocolUnencryptedHTTP2, srv.Protocols.SetUnencryptedHTTP2); err != nil {
 		return nil, err
-	}
-
-	if protocolSet {
-		srv.Protocols = protocols
 	}
 
 	return env, nil

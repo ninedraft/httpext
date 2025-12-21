@@ -38,10 +38,15 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 	flags.IntVar(&srv.MaxHeaderBytes, name+"max-header-bytes", srv.MaxHeaderBytes,
 		"maximum header size in bytes (0 means http.DefaultMaxHeaderBytes)")
 
-	protocols := httpintern.Protocols(srv)
+	srv.Protocols = httpintern.Protocols(srv)
 
-	flagProtocol := func(proto string, setFunc func(bool)) {
-		usage := fmt.Sprintf("enable or disable %s protocol", proto)
+	flagProtocol := func(proto string, enabled bool, setFunc func(bool)) {
+		state := "enabled"
+		if !enabled {
+			state = "disabled"
+		}
+
+		usage := fmt.Sprintf("enable or disable %s protocol, %s by default", proto, state)
 		flags.BoolFunc(name+"protocols."+proto, usage, func(s string) error {
 			ok, err := strconv.ParseBool(s)
 			if err != nil {
@@ -49,14 +54,13 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 			}
 			setFunc(ok)
 
-			srv.Protocols = &protocols
 			return nil
 		})
 	}
 
-	flagProtocol("http1", protocols.SetHTTP1)
-	flagProtocol("http2", protocols.SetHTTP2)
-	flagProtocol("unencrypted_http2", protocols.SetUnencryptedHTTP2)
+	flagProtocol("http1", srv.Protocols.HTTP1(), srv.Protocols.SetHTTP1)
+	flagProtocol("http2", srv.Protocols.HTTP2(), srv.Protocols.SetHTTP2)
+	flagProtocol("unencrypted_http2", srv.Protocols.UnencryptedHTTP2(), srv.Protocols.SetUnencryptedHTTP2)
 
 	return nil
 }
