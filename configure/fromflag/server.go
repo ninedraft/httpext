@@ -40,7 +40,6 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 	if srv.Protocols != nil {
 		*protocols = *srv.Protocols // user-configured set
 	}
-	protocolSet := false
 
 	flagProtocol := func(proto string, setFunc func(bool)) {
 		usage := fmt.Sprintf("enable or disable %s protocol", proto)
@@ -51,7 +50,8 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 			}
 			setFunc(ok)
 
-			protocolSet = true
+			srv.Protocols = protocols
+
 			return nil
 		})
 	}
@@ -59,10 +59,6 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 	flagProtocol("http1", protocols.SetHTTP2)
 	flagProtocol("http2", protocols.SetHTTP2)
 	flagProtocol("unencrypted_http2", protocols.SetUnencryptedHTTP2)
-
-	if protocolSet {
-		srv.Protocols = protocols
-	}
 
 	return nil
 }
