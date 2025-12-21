@@ -35,7 +35,9 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 		"maximum duration for reading request headers")
 	flags.DurationVar(&srv.WriteTimeout, name+"write-timeout", srv.WriteTimeout,
 		"maximum duration before timing out writes")
-	flags.IntVar(&srv.MaxHeaderBytes, name+"max-header-bytes", srv.MaxHeaderBytes,
+
+	maxHeaderBytes := cmp.Or(srv.MaxHeaderBytes, http.DefaultMaxHeaderBytes)
+	flags.IntVar(&srv.MaxHeaderBytes, name+"max-header-bytes", maxHeaderBytes,
 		"maximum header size in bytes (0 means http.DefaultMaxHeaderBytes)")
 
 	srv.Protocols = httpintern.Protocols(srv)
@@ -46,7 +48,7 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 			state = "disabled"
 		}
 
-		usage := fmt.Sprintf("enable or disable %s protocol, %s by default", proto, state)
+		usage := fmt.Sprintf("enable or disable %s protocol, %s by default, true/false", proto, state)
 		flags.BoolFunc(name+"protocols."+proto, usage, func(s string) error {
 			ok, err := strconv.ParseBool(s)
 			if err != nil {
