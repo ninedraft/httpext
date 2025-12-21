@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	httpintern "github.com/ninedraft/httpext/configure/internal/http"
 )
 
 // Server registers flag bindings for commonly tuned http.Server fields.
@@ -36,10 +38,7 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 	flags.IntVar(&srv.MaxHeaderBytes, name+"max-header-bytes", srv.MaxHeaderBytes,
 		"maximum header size in bytes (0 means http.DefaultMaxHeaderBytes)")
 
-	protocols := &http.Protocols{}
-	if srv.Protocols != nil {
-		*protocols = *srv.Protocols // user-configured set
-	}
+	protocols := httpintern.Protocols(srv)
 
 	flagProtocol := func(proto string, setFunc func(bool)) {
 		usage := fmt.Sprintf("enable or disable %s protocol", proto)
@@ -50,8 +49,7 @@ func Server(flags *flag.FlagSet, prefix string, srv *http.Server) error {
 			}
 			setFunc(ok)
 
-			srv.Protocols = protocols
-
+			srv.Protocols = &protocols
 			return nil
 		})
 	}
