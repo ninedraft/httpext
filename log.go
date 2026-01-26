@@ -82,16 +82,6 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 	}
 }
 
-func setOf[E comparable](items []E) map[E]struct{} {
-	set := make(map[E]struct{}, len(items))
-
-	for _, item := range items {
-		set[item] = struct{}{}
-	}
-
-	return set
-}
-
 func headerSet(items []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(items))
 	for _, item := range items {
