@@ -2,6 +2,8 @@ package httpext_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -30,10 +32,13 @@ func TestLog_Ok(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 		handle := handler("/test", 200, body, nil)
 
-		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
-		require.Containsf(t, logBuf.String(), "panic=false", "logs")
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		resp := getMap(t, entries[0], "response")
+		requireKeyValue(t, resp, "panic", false, "panic=false is logged")
 	})
 
 	t.Run("no write header", func(t *testing.T) {
@@ -47,10 +52,11 @@ func TestLog_Ok(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 		handle := handler("/test", 0, body, nil)
 
-		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
-		require.NotEmptyf(t, logBuf.String(), "logs")
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.NotEmptyf(t, entries, "logs")
 	})
 
 	t.Run("header", func(t *testing.T) {
@@ -67,11 +73,16 @@ func TestLog_Ok(t *testing.T) {
 		}
 		handle := handler("/test", 200, body, header)
 
-		With(handle, LogWithRecover(log, "X-Test")).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{
+			ResponseHeaders: []string{"X-Test"},
+		})).ServeHTTP(rw, req)
 
 		require.Equal(t, body, rw.Body.String(), "response body")
-		require.Containsf(t, logBuf.String(), "X-Test", "logs contains header values")
-		require.Containsf(t, logBuf.String(), "test-value", "logs contains header values")
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		resp := getMap(t, entries[0], "response")
+		hdr := getMap(t, resp, "header")
+		requireKeyValue(t, hdr, "X-Test", "test-value", "logs contains header values")
 	})
 
 	t.Run("header filtered", func(t *testing.T) {
@@ -89,11 +100,112 @@ func TestLog_Ok(t *testing.T) {
 		}
 		handle := handler("/test", 200, body, header)
 
-		With(handle, LogWithRecover(log, "X-Test")).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{
+			ResponseHeaders: []string{"X-Test"},
+		})).ServeHTTP(rw, req)
 
-		require.Containsf(t, logBuf.String(), "X-Test", "allowed header name is logged")
-		require.NotContainsf(t, logBuf.String(), "X-Secret", "disallowed header is filtered out")
-		require.NotContainsf(t, logBuf.String(), "top-secret", "disallowed header values are filtered out")
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		resp := getMap(t, entries[0], "response")
+		hdr := getMap(t, resp, "header")
+		requireKeyValue(t, hdr, "X-Test", "test-value", "allowed header name is logged")
+		require.NotContainsf(t, hdr, "X-Secret", "disallowed header is filtered out")
+	})
+
+	t.Run("request header", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
+		req.Header.Set("X-Test", "req-value")
+		handle := handler("/test", 200, body, nil)
+
+		With(handle, LogWithRecover(log, LoggerConfig{
+			RequestHeaders: []string{"X-Test"},
+		})).ServeHTTP(rw, req)
+
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		reqLog := getMap(t, entries[0], "request")
+		hdr := getMap(t, reqLog, "header")
+		requireKeyValue(t, hdr, "X-Test", "req-value", "logs contains request header value")
+	})
+
+	t.Run("request header filtered", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
+		req.Header.Set("X-Test", "req-value")
+		req.Header.Set("X-Secret", "top-secret")
+		handle := handler("/test", 200, body, nil)
+
+		With(handle, LogWithRecover(log, LoggerConfig{
+			RequestHeaders: []string{"X-Test"},
+		})).ServeHTTP(rw, req)
+
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		reqLog := getMap(t, entries[0], "request")
+		hdr := getMap(t, reqLog, "header")
+		requireKeyValue(t, hdr, "X-Test", "req-value", "allowed header name is logged")
+		require.NotContainsf(t, hdr, "X-Secret", "disallowed header is filtered out")
+	})
+
+	t.Run("request header allowlist case-insensitive", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
+		req.Header.Set("X-Test", "req-value")
+		handle := handler("/test", 200, body, nil)
+
+		With(handle, LogWithRecover(log, LoggerConfig{
+			RequestHeaders: []string{"x-test"},
+		})).ServeHTTP(rw, req)
+
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		reqLog := getMap(t, entries[0], "request")
+		hdr := getMap(t, reqLog, "header")
+		requireKeyValue(t, hdr, "X-Test", "req-value", "logs contains request header value")
+	})
+
+	t.Run("response header allowlist case-insensitive", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
+		header := http.Header{
+			"X-Test": {"resp-value"},
+		}
+		handle := handler("/test", 200, body, header)
+
+		With(handle, LogWithRecover(log, LoggerConfig{
+			ResponseHeaders: []string{"x-test"},
+		})).ServeHTTP(rw, req)
+
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		resp := getMap(t, entries[0], "response")
+		hdr := getMap(t, resp, "header")
+		requireKeyValue(t, hdr, "X-Test", "resp-value", "logs contains response header value")
 	})
 
 	t.Run("defaults status when handler silent", func(t *testing.T) {
@@ -107,10 +219,12 @@ func TestLog_Ok(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", strings.NewReader(body))
 		handle := handler("/test", 0, "", nil)
 
-		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
 
-		logs := logBuf.String()
-		require.Contains(t, logs, "status=200", "default success status is logged")
+		entries := decodeLogs(t, logBuf.Bytes())
+		require.Len(t, entries, 1)
+		resp := getMap(t, entries[0], "response")
+		requireKeyValue(t, resp, "status", http.StatusOK, "default success status is logged")
 	})
 }
 
@@ -130,11 +244,13 @@ func TestLog_panic(t *testing.T) {
 	}
 
 	require.NotPanicsf(t, func() {
-		With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
 	}, "handler")
 
-	t.Log(logBuf)
-	require.Containsf(t, logBuf.String(), "panic=true", "logs")
+	entries := decodeLogs(t, logBuf.Bytes())
+	require.GreaterOrEqual(t, len(entries), 1)
+	resp := getMap(t, entries[len(entries)-1], "response")
+	requireKeyValue(t, resp, "panic", true, "logs panic flag")
 }
 
 func TestLog_ServerError(t *testing.T) {
@@ -150,12 +266,14 @@ func TestLog_ServerError(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
 	handle := handler("/test", http.StatusServiceUnavailable, body, nil)
 
-	With(handle, LogWithRecover(log)).ServeHTTP(rw, req)
+	With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
 
-	logs := logBuf.String()
-	require.Contains(t, logs, "level=ERROR", "server errors are logged on error level")
-	require.Contains(t, logs, "status=503", "response status is logged")
-	require.Contains(t, logs, "panic=false", "panic flag is false for server errors")
+	entries := decodeLogs(t, logBuf.Bytes())
+	require.Len(t, entries, 1)
+	requireKeyValue(t, entries[0], "level", "ERROR", "server errors are logged on error level")
+	resp := getMap(t, entries[0], "response")
+	requireKeyValue(t, resp, "status", http.StatusServiceUnavailable, "response status is logged")
+	requireKeyValue(t, resp, "panic", false, "panic flag is false for server errors")
 }
 
 func TestResponseWriterInterceptor(t *testing.T) {
@@ -218,11 +336,45 @@ func TestResponseWriterInterceptor(t *testing.T) {
 func bufLog() (*slog.Logger, *bytes.Buffer) {
 	buf := &bytes.Buffer{}
 
-	handler := slog.NewTextHandler(buf, &slog.HandlerOptions{
+	handler := slog.NewJSONHandler(buf, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})
 
 	return slog.New(handler), buf
+}
+
+func decodeLogs(t testing.TB, data []byte) []map[string]any {
+	t.Helper()
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var entries []map[string]any
+	for {
+		var entry map[string]any
+		err := dec.Decode(&entry)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err, "logs bytes -> json.Decoder.Decode(&map)")
+
+		entries = append(entries, entry)
+	}
+
+	return entries
+}
+
+func getMap(t testing.TB, m map[string]any, key string) map[string]any {
+	t.Helper()
+
+	require.IsType(t, map[string]any{}, m[key], "expected map for %s", key)
+	v, _ := m[key].(map[string]any)
+	return v
+}
+
+func requireKeyValue(t testing.TB, m map[string]any, key string, value any, msg string, args ...any) {
+	t.Helper()
+
+	require.Containsf(t, m, key, msg, args...)
+	require.EqualValuesf(t, value, m[key], msg, args...)
 }
 
 func handler(pattern string, status int, body string, header http.Header) http.Handler {

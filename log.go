@@ -5,16 +5,23 @@ import (
 	"cmp"
 	"log/slog"
 	"net/http"
+	"net/textproto"
 	"runtime/debug"
-	"slices"
+	"strings"
 	"time"
 )
+
+type LoggerConfig struct {
+	RequestHeaders  []string
+	ResponseHeaders []string
+}
 
 // LogWithRecover logs request and response data into provided slog instance.
 // Additionally it logs response headers from provided allowlist.
 // It tries to recover panics from handler and logs the as errors with stack and recover value.
-func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
-	headerAllowset := setOf(allowedHeaders)
+func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
+	requestHeader := headerSet(cfg.RequestHeaders)
+	responseHeader := headerSet(cfg.ResponseHeaders)
 
 	return func(next http.Handler) http.Handler {
 		handle := func(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +41,7 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 
 				if panicked {
 					response.StatusCode = cmp.Or(response.StatusCode, http.StatusInternalServerError)
-					Error(w, http.StatusInternalServerError)
+					Error(response, http.StatusInternalServerError)
 
 					entry = log.ErrorContext
 
@@ -50,14 +57,15 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 						slog.String("host", r.Host),
 						slog.String("uri", r.RequestURI),
 						slog.String("from", r.RemoteAddr),
+						headerGroup(r.Header, "header", requestHeader),
 					),
 					slog.GroupAttrs("response",
 						slog.Duration("duration", dt),
 						slog.Bool("panic", panicked),
 						slog.Int("status", response.StatusCode),
 						slog.Int64("body_size", response.Written),
-						slog.Any("header", filterHeader(response.Header(), headerAllowset))),
-				)
+						headerGroup(response.Header(), "header", responseHeader),
+					))
 			}()
 
 			next.ServeHTTP(response, r)
@@ -74,29 +82,30 @@ func LogWithRecover(log *slog.Logger, allowedHeaders ...string) Middleware {
 	}
 }
 
-func setOf[E comparable](items []E) map[E]struct{} {
-	set := make(map[E]struct{}, len(items))
-
+func headerSet(items []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		set[item] = struct{}{}
+		set[textproto.CanonicalMIMEHeaderKey(item)] = struct{}{}
 	}
-
 	return set
 }
 
-func filterHeader(header http.Header, set map[string]struct{}) http.Header {
-	safe := make(http.Header, len(header))
-
-	for key := range set {
-		safe[key] = slices.Clone(header.Values(key))
+func headerGroup(header http.Header, group string, set map[string]struct{}) slog.Attr {
+	entries := make([]slog.Attr, 0, len(set))
+	for key, values := range header {
+		key = textproto.CanonicalMIMEHeaderKey(key)
+		if _, ok := set[key]; !ok {
+			continue
+		}
+		entries = append(entries, slog.String(key, strings.Join(values, ", ")))
 	}
 
-	return safe
+	return slog.GroupAttrs(group, entries...)
 }
 
 // ResponseWriterInterceptor allows to spy on http handler
 // by catching result status code, response body size, etc.
-// It's compatible with http.http.NewResponseController
+// It's compatible with http.NewResponseController
 type ResponseWriterInterceptor struct {
 	http.ResponseWriter
 
