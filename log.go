@@ -41,7 +41,7 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 
 				if panicked {
 					response.StatusCode = cmp.Or(response.StatusCode, http.StatusInternalServerError)
-					Error(w, http.StatusInternalServerError)
+					Error(response, http.StatusInternalServerError)
 
 					entry = log.ErrorContext
 
