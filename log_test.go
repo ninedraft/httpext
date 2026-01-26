@@ -3,6 +3,7 @@ package httpext_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -347,11 +348,17 @@ func decodeLogs(t testing.TB, data []byte) []map[string]any {
 
 	dec := json.NewDecoder(bytes.NewReader(data))
 	var entries []map[string]any
-	for dec.More() {
+	for {
 		var entry map[string]any
-		require.NoError(t, dec.Decode(&entry))
+		err := dec.Decode(&entry)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err, "logs bytes -> json.Decoder.Decode(&map)")
+
 		entries = append(entries, entry)
 	}
+
 	return entries
 }
 
