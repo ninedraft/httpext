@@ -105,7 +105,7 @@ func headerGroup(header http.Header, group string, set map[string]struct{}) slog
 
 // ResponseWriterInterceptor allows to spy on http handler
 // by catching result status code, response body size, etc.
-// It's compatible with http.http.NewResponseController
+// It's compatible with http.NewResponseController
 type ResponseWriterInterceptor struct {
 	http.ResponseWriter
 
