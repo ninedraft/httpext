@@ -15,7 +15,7 @@ func ExampleMiddlewares() {
 
 	base := httpext.Middlewares(
 		httpext.MaxBytes(1024*1024),
-		httpext.LogWithRecover(slog.Default()),
+		httpext.LogWithRecover(slog.Default(), httpext.LoggerConfig{}),
 	)
 
 	mux.HandleFunc("/v1/hello", hello, base)
