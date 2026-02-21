@@ -183,6 +183,47 @@ func TestLog_Ok(t *testing.T) {
 		requireKeyValue(t, hdr, "X-Test", "req-value", "logs contains request header value")
 	})
 
+	t.Run("request id from x-request-id header", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest(http.MethodGet, "/test", strings.NewReader(body))
+		req.Header.Set("X-Request-ID", "req-123")
+		handle := handler("/test", 200, body, nil)
+
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
+
+		rawLogs := rawLogLines(logBuf.Bytes())
+		require.Len(t, rawLogs, 1)
+		logLine := rawLineWithMsg(t, rawLogs, "http handler")
+
+		require.Equal(t, "req-123", extractRequestID(t, logLine), "x-request-id should be propagated to log")
+	})
+
+	t.Run("request id is generated when header missing", func(t *testing.T) {
+		t.Parallel()
+
+		log, logBuf := bufLog()
+
+		rw := httptest.NewRecorder()
+		rw.Body = &bytes.Buffer{}
+
+		req := httptest.NewRequest(http.MethodGet, "/test", strings.NewReader(body))
+		handle := handler("/test", 200, body, nil)
+
+		With(handle, LogWithRecover(log, LoggerConfig{})).ServeHTTP(rw, req)
+
+		rawLogs := rawLogLines(logBuf.Bytes())
+		require.Len(t, rawLogs, 1, "rawlogs")
+
+		logLine := rawLineWithMsg(t, rawLogs, "http handler")
+		require.NotEmpty(t, extractRequestID(t, logLine), "generated request id should be non-empty")
+	})
+
 	t.Run("response header allowlist case-insensitive", func(t *testing.T) {
 		t.Parallel()
 
@@ -239,6 +280,7 @@ func TestLog_panic(t *testing.T) {
 	rw.Body = &bytes.Buffer{}
 
 	req := httptest.NewRequest("GET", "/test", strings.NewReader(body))
+	req.Header.Set("X-Request-ID", "panic-id")
 	var handle http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 		panic("test")
 	}
@@ -251,6 +293,10 @@ func TestLog_panic(t *testing.T) {
 	require.GreaterOrEqual(t, len(entries), 1)
 	resp := getMap(t, entries[len(entries)-1], "response")
 	requireKeyValue(t, resp, "panic", true, "logs panic flag")
+
+	rawLogs := rawLogLines(logBuf.Bytes())
+	panicLine := rawLineWithMsg(t, rawLogs, "!!PANIC!!")
+	require.Equal(t, "panic-id", extractRequestID(t, panicLine), "panic log should include request id from header")
 }
 
 func TestLog_ServerError(t *testing.T) {
@@ -375,6 +421,55 @@ func requireKeyValue(t testing.TB, m map[string]any, key string, value any, msg 
 
 	require.Containsf(t, m, key, msg, args...)
 	require.EqualValuesf(t, value, m[key], msg, args...)
+}
+
+func rawLogLines(data []byte) []string {
+	lines := strings.Split(string(data), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		filtered = append(filtered, line)
+	}
+
+	return filtered
+}
+
+func rawLineWithMsg(t testing.TB, lines []string, msg string) string {
+	t.Helper()
+
+	for _, line := range lines {
+		var entry struct {
+			Msg string `json:"msg"`
+		}
+		err := json.Unmarshal([]byte(line), &entry)
+		require.NoError(t, err, "raw log line should be valid json")
+
+		if entry.Msg == msg {
+			return line
+		}
+	}
+
+	require.Failf(t, "msg not found", "msg=%q was not found in raw logs", msg)
+	return ""
+}
+
+func extractRequestID(t testing.TB, rawLogLine string) string {
+	t.Helper()
+
+	var entry struct {
+		Request struct {
+			ID string `json:"id"`
+		} `json:"request"`
+	}
+
+	err := json.Unmarshal([]byte(rawLogLine), &entry)
+	require.NoError(t, err, "unmrshal log line")
+
+	return entry.Request.ID
 }
 
 func handler(pattern string, status int, body string, header http.Header) http.Handler {

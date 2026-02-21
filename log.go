@@ -3,6 +3,7 @@ package httpext
 import (
 	"bytes"
 	"cmp"
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"net/textproto"
@@ -27,6 +28,7 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 		handle := func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
+			reqID := requestID(r.Header)
 			response := &ResponseWriterInterceptor{ResponseWriter: w}
 
 			panicked := true
@@ -46,12 +48,14 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 					entry = log.ErrorContext
 
 					entry(ctx, "!!PANIC!!",
+						slog.GroupAttrs("request", slog.String("id", reqID)),
 						slog.Any("recover", recover()),
 						slog.String("stack", string(debug.Stack())))
 				}
 
 				entry(ctx, "http handler",
 					slog.GroupAttrs("request",
+						slog.String("id", reqID),
 						slog.String("method", r.Method),
 						slog.String("pattern", r.Pattern),
 						slog.String("host", r.Host),
@@ -143,4 +147,13 @@ func (rw *ResponseWriterInterceptor) Write(p []byte) (int, error) {
 	rw.Written += int64(n)
 
 	return n, err
+}
+
+func requestID(header http.Header) string {
+	headerID := header.Get("X-Request-ID")
+	if headerID != "" {
+		return headerID
+	}
+
+	return time.Now().Format(time.RFC3339) + "_" + rand.Text()
 }
