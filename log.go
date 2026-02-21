@@ -28,8 +28,7 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 		handle := func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
-			reqID := slog.GroupAttrs("request", slog.String("id", requestID(r.Header)))
-
+			reqID := requestID(r.Header)
 			response := &ResponseWriterInterceptor{ResponseWriter: w}
 
 			panicked := true
@@ -50,13 +49,14 @@ func LogWithRecover(log *slog.Logger, cfg LoggerConfig) Middleware {
 
 					entry(ctx, "!!PANIC!!",
 						reqID,
+						slog.GroupAttrs("request", slog.String("id", reqID)),
 						slog.Any("recover", recover()),
 						slog.String("stack", string(debug.Stack())))
 				}
 
 				entry(ctx, "http handler",
-					reqID,
 					slog.GroupAttrs("request",
+						slog.String("id", reqID),
 						slog.String("method", r.Method),
 						slog.String("pattern", r.Pattern),
 						slog.String("host", r.Host),
