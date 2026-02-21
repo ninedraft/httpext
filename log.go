@@ -155,5 +155,5 @@ func requestID(header http.Header) string {
 		return headerID
 	}
 
-	return time.Now().Format(time.RFC3339 + "_" + rand.Text())
+	return time.Now().Format(time.RFC3339) + "_" + rand.Text()
 }
