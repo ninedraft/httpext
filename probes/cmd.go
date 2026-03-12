@@ -104,7 +104,6 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 
 	err := flags.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
-		flags.Usage()
 		return nil
 	}
 
