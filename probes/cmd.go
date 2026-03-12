@@ -6,19 +6,25 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 )
 
-// Main calls Cmd util as main comman for your program.
-// Main always calls os.Exit.
+// Main runs the probe CLI using the current process arguments.
 //
-// Use it in main package to create a cmd util.
+// It parses os.Args[1:], executes Cmd with flag.CommandLine,
+// writes a human-readable error message to stderr on failure,
+// and terminates the process via os.Exit.
+//
+// Use Main from a dedicated probe binary or a small main package:
 //
 //	func main() {
 //		probes.Main()
@@ -35,33 +41,55 @@ func Main() {
 }
 
 var (
-	ErrBadStatus           = errors.New("bad status on probe")
-	ErrTargetIsNotLoopBack = errors.New("only loopback targets are allowed!")
+	// ErrBadStatus reports that the probe request completed successfully at the
+	// transport level, but the HTTP response status code was not accepted.
+	//
+	// Cmd currently accepts only 200 OK and 204 No Content as successful probe
+	// responses.
+	ErrBadStatus = errors.New("bad status on probe")
+
+	// ErrTargetIsNotLoopBack reports that the target hostname resolved to one or
+	// more non-loopback IP addresses.
+	//
+	// Cmd allows requests only to targets whose resolved addresses are all
+	// loopback addresses.
+	ErrTargetIsNotLoopBack = errors.New("target host must resolve only to loopback addresses")
 
 	errBadScheme             = errors.New("bad target scheme")
+	errBadHost               = errors.New("bad target host")
 	errBadPort               = errors.New("bad target port")
 	errRedirectsAreForbidden = errors.New("redirects are forbidden for HTTP probes")
 )
 
-// Cmd allows to build an embedded HTTP prober for your app.
+// Cmd runs the HTTP probe command.
 //
-// Ship your apps using scratch images!
+// Cmd defines probe-specific flags on flags, parses args, validates the target,
+// resolves the target host, verifies that all resolved addresses are loopback,
+// and performs the HTTP request using a transport pinned to those resolved
+// loopback addresses.
 //
-// Cmd will allow to dial only local addresses.
+// Security properties:
+//   - only http and https targets are accepted
+//   - redirects are rejected
+//   - proxies are disabled
+//   - the target host must resolve only to loopback addresses
+//   - the actual TCP dial is pinned to the resolved loopback IPs
 //
-// Call it as a subcommand
+// If args does not contain a target URL, Cmd uses http://localhost:9090.
 //
-//	if flag.Arg(0) == "probe" {
-//		flagset := flag.NewFlagSet("probe", flag.ContinueOnError)
-//		err := probes.Cmd(flagset, os.Args[2:])
-//		if err != nil { panic(err) }
+// The provided FlagSet must be fresh and not yet parsed, because Cmd registers
+// its own flags on it and then parses args.
+//
+// Args must not include the program name.
+//
+// Typical use as a subcommand:
+//
+//	if len(os.Args) > 1 && os.Args[1] == "probe" {
+//		fs := flag.NewFlagSet("probe", flag.ContinueOnError)
+//		if err := probes.Cmd(fs, os.Args[2:]); err != nil {
+//			panic("probe: " + err.Error())
+//		}
 //		return
-//	 }
-//
-// or just make a separate main package
-//
-//	func main() {
-//	   probes.Main()
 //	}
 func Cmd(flags *flag.FlagSet, args []string) error {
 	timeout := time.Second
@@ -83,13 +111,19 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		return err
 	}
 
+	log := func(string, ...any) {}
+	if verbose {
+		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})).Debug
+	}
+
 	target := flags.Arg(0)
 	if target == "" {
 		target = "http://localhost:9090"
-	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+		log("got empty target, selecting default", "target", target)
+	}
 
 	targetURL, err := url.Parse(target)
 	if err != nil {
@@ -97,6 +131,9 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 	}
 	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
 		return fmt.Errorf("%w: only http and https are supported", errBadScheme)
+	}
+	if targetURL.Hostname() == "" {
+		return fmt.Errorf("%w: empty host", errBadHost)
 	}
 
 	targetPort, err := strconv.ParseUint(targetURL.Port(), 10, 16)
@@ -111,45 +148,56 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		}
 	}
 
-	if targetPort == 0 {
-		return fmt.Errorf("%w: zero is not allowed", errBadPort)
+	if targetPort == 0 || targetPort > math.MaxUint16 {
+		return fmt.Errorf("%w: %d is not allowed", errBadPort, targetPort)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	log("resolving target hostname", "hostname", targetURL.Hostname())
 	hostAddresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", targetURL.Hostname())
 	if err != nil {
 		return fmt.Errorf("unable to lookup target hostname: %w", err)
 	}
+	if len(hostAddresses) == 0 {
+		return fmt.Errorf("%w: resolver returned no addresses", errBadHost)
+	}
 
-	var loopbacks []netip.Addr
+	slices.SortStableFunc(hostAddresses, netip.Addr.Compare)
+
+	log("checking resolved target IP addresses", "addresses", hostAddresses)
 	for _, addr := range hostAddresses {
-		if addr.IsLoopback() {
-			loopbacks = append(loopbacks, addr)
+		if !addr.IsLoopback() {
+			return fmt.Errorf("%w: %q -> %q", ErrTargetIsNotLoopBack, targetURL.Hostname(), hostAddresses)
 		}
 	}
-	if len(loopbacks) == 0 {
-		return fmt.Errorf("%w: %q -> %q", ErrTargetIsNotLoopBack, targetURL.Hostname(), hostAddresses)
+
+	dialer := &net.Dialer{
+		Timeout: timeout,
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.ResponseHeaderTimeout = timeout
+	transport := newTransport(timeout,
+		func(ctx context.Context) (conn net.Conn, err error) {
+			for _, addr := range hostAddresses {
+				tcpAddr := netip.AddrPortFrom(addr, uint16(targetPort))
+				log("trying to dial", "address", tcpAddr)
 
-	dialer := &net.Dialer{}
-
-	transport.DialContext = func(ctx context.Context, network, addr string) (conn net.Conn, err error) {
-		for _, addr := range loopbacks {
-			conn, err = dialer.DialContext(ctx, "tcp", (&net.TCPAddr{
-				IP:   addr.AsSlice(),
-				Zone: addr.Zone(),
-				Port: int(targetPort),
-			}).String())
-			if err == nil {
-				break
+				conn, err = dialer.DialContext(ctx, "tcp", tcpAddr.String())
+				if err == nil {
+					log("success!", "address", tcpAddr)
+					break
+				}
+				if errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) {
+					log("context cancelled during dial", "err", err, "err_ctx", context.Cause(ctx))
+					return nil, err
+				}
+				log("unable to dial, trying next", "error", err)
 			}
-		}
 
-		return conn, err
-	}
+			return conn, err
+		})
 
 	client := &http.Client{
 		Timeout:   timeout,
@@ -164,6 +212,7 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		return fmt.Errorf("preparing request: %w", err)
 	}
 
+	log("doing request", "method", method, "target", target)
 	resp, err := client.Do(req)
 	if resp != nil {
 		defer resp.Body.Close()
@@ -172,6 +221,8 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 	if err != nil {
 		return fmt.Errorf("making request %s %q: %w", method, req.URL, err)
 	}
+
+	log("got response", "status", resp.Status, "status_code", resp.StatusCode)
 
 	ok := resp.StatusCode == http.StatusOK ||
 		resp.StatusCode == http.StatusNoContent
@@ -194,4 +245,19 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 	}
 
 	return nil
+}
+
+func newTransport(timeout time.Duration, dial func(ctx context.Context) (net.Conn, error)) *http.Transport {
+	return &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dial(ctx)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          1,
+		IdleConnTimeout:       timeout,
+		TLSHandshakeTimeout:   timeout,
+		ExpectContinueTimeout: timeout,
+		ResponseHeaderTimeout: timeout,
+	}
 }
