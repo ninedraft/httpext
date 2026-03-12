@@ -30,7 +30,8 @@ import (
 //		probes.Main()
 //	}
 func Main() {
-	err := Cmd(flag.CommandLine, os.Args[1:])
+	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
+	err := Cmd(flags, os.Args[1:])
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
