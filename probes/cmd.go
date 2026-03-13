@@ -33,6 +33,11 @@ func Main() {
 	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
 	err := Cmd(flags, os.Args[1:])
 
+	if errors.Is(err, ErrProbeClientConfiguration) {
+		fmt.Fprintf(os.Stderr, "CONFGIRATION ERROR: %v\n", err)
+		os.Exit(2)
+	}
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
@@ -55,6 +60,9 @@ var (
 	// Cmd allows requests only to targets whose resolved addresses are all
 	// loopback addresses.
 	ErrTargetIsNotLoopBack = errors.New("target host must resolve only to loopback addresses")
+
+	// ErrConfiguration means probe client misconfigured.
+	ErrProbeClientConfiguration = errors.New("probe client misconfigured")
 
 	errBadScheme             = errors.New("bad target scheme")
 	errBadHost               = errors.New("bad target host")
@@ -103,12 +111,13 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 	flags.StringVar(&method, "method", method, "method to call probe")
 
 	err := flags.Parse(args)
+
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}
 
 	if err != nil {
-		return err
+		return errors.Join(ErrProbeClientConfiguration, err)
 	}
 
 	log := func(string, ...any) {}
@@ -127,18 +136,18 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 
 	targetURL, err := url.Parse(target)
 	if err != nil {
-		return fmt.Errorf("invalid target %q: %w", target, err)
+		return fmt.Errorf("%w, invalid target URL %q: %w", ErrProbeClientConfiguration, target, err)
 	}
 	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
-		return fmt.Errorf("%w: only http and https are supported", errBadScheme)
+		return fmt.Errorf("%w, %w: only http and https are supported, got %q", ErrProbeClientConfiguration, errBadScheme, targetURL.Scheme)
 	}
 	if targetURL.Hostname() == "" {
-		return fmt.Errorf("%w: empty host", errBadHost)
+		return fmt.Errorf("%w, %w: empty host", ErrProbeClientConfiguration, errBadHost)
 	}
 
 	targetPort, err := strconv.ParseUint(targetURL.Port(), 10, 16)
 	if err != nil && targetURL.Port() != "" {
-		return fmt.Errorf("%w %q: %w", errBadPort, targetURL.Port(), err)
+		return fmt.Errorf("%w, %w %q: %w", ErrProbeClientConfiguration, errBadPort, targetURL.Port(), err)
 	}
 
 	if targetPort == 0 && targetURL.Port() == "" {
@@ -149,7 +158,7 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 	}
 
 	if targetPort == 0 || targetPort > math.MaxUint16 {
-		return fmt.Errorf("%w: %d is not allowed", errBadPort, targetPort)
+		return fmt.Errorf("%w, %w: %d is not allowed", ErrProbeClientConfiguration, errBadPort, targetPort)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
