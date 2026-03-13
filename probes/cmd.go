@@ -20,9 +20,17 @@ import (
 
 // Main runs the probe CLI using the current process arguments.
 //
-// It parses os.Args[1:], executes Cmd with flag.CommandLine,
+// It parses os.Args[1:] using a fresh FlagSet,
 // writes a human-readable error message to stderr on failure,
 // and terminates the process via os.Exit.
+//
+// Flags:
+//   - -timeout duration: request timeout (default 1s)
+//   - -method string: HTTP method for the probe request (default GET)
+//   - -v: print response body and debug log interactions
+//
+// Positional args:
+//   - target: probe URL; if omitted, RunProbe default target is used
 //
 // Use Main from a dedicated probe binary or a small main package:
 //
@@ -31,7 +39,7 @@ import (
 //	}
 func Main() {
 	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
-	err := Cmd(flags, os.Args[1:])
+	err := runCmd(flags, os.Args[1:])
 
 	if errors.Is(err, ErrProbeClientConfiguration) {
 		fmt.Fprintf(os.Stderr, "CONFGIRATION ERROR: %v\n", err)
@@ -70,25 +78,7 @@ var (
 	errRedirectsAreForbidden = errors.New("redirects are forbidden for HTTP probes")
 )
 
-// Cmd runs the HTTP probe command.
-//
-// The provided FlagSet must be fresh and not yet parsed, because Cmd registers
-// its own flags on it and then parses args.
-//
-// Args must not include the program name.
-//
-// Typical use as a subcommand:
-//
-//	if len(os.Args) > 1 && os.Args[1] == "probe" {
-//		fs := flag.NewFlagSet("probe", flag.ContinueOnError)
-//		if err := probes.Cmd(fs, os.Args[2:]); err != nil {
-//			panic("probe: " + err.Error())
-//		}
-//		return
-//	}
-//
-//go:fix inline
-func Cmd(flags *flag.FlagSet, args []string) error {
+func runCmd(flags *flag.FlagSet, args []string) error {
 	cfg := ClientConfig{
 		Timeout:     time.Second,
 		Method:      http.MethodGet,
@@ -119,7 +109,7 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		return errors.Join(ErrProbeClientConfiguration, err)
 	}
 
-	cfg.Target = flag.Arg(0)
+	cfg.Target = flags.Arg(0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
