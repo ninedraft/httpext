@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+const DefaultProbeTarget = "http://localhost:9090"
+
 // Main runs the probe CLI using the current process arguments.
 //
 // It parses os.Args[1:] using a fresh FlagSet,
@@ -137,7 +139,9 @@ func runCmd(flags *flag.FlagSet, args []string) error {
 // ClientConfig configures RunProbe behavior.
 type ClientConfig struct {
 	// Target is the probe URL.
-	// If empty, RunProbe uses http://localhost:9090.
+	// If empty, RunProbe uses DefaultProbeTarget.
+	// If port is omitted, will use 80 for http scheme and 443 for https scheme.
+	// Only http and https schemes are allowed.
 	Target string
 
 	// Method is the HTTP request method.
@@ -239,7 +243,7 @@ func withProbeConfigDefaults(cfg ClientConfig) ClientConfig {
 		cfg.Logf = func(string, ...any) {}
 	}
 	if cfg.Target == "" {
-		cfg.Target = "http://localhost:9090"
+		cfg.Target = DefaultProbeTarget
 		cfg.Logf("got empty target, selecting default", "target", cfg.Target)
 	}
 	if cfg.Method == "" {
