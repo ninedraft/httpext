@@ -73,7 +73,7 @@ func TestCmd_uknown_flag(t *testing.T) {
 
 	t.Logf("output: %s", got)
 	assertExitCode(t, err, 2)
-	assertOutputContains(t, got, "CONFGIRATION ERROR")
+	assertOutputContains(t, got, "CONFIGURATION ERROR")
 }
 
 func TestCmd_help(t *testing.T) {
@@ -135,7 +135,7 @@ func TestCmd_configuration_validation(t *testing.T) {
 
 			t.Logf("output: %s", got)
 			assertExitCode(t, err, 2)
-			assertOutputContains(t, got, "CONFGIRATION ERROR")
+			assertOutputContains(t, got, "CONFIGURATION ERROR")
 			assertOutputContains(t, got, test.wantInOutpt)
 		})
 	}
