@@ -86,15 +86,28 @@ var (
 //		}
 //		return
 //	}
+//
+//go:fix inline
 func Cmd(flags *flag.FlagSet, args []string) error {
-	timeout := time.Second
-	flags.DurationVar(&timeout, "timeout", timeout, "request timeout")
+	cfg := ClientConfig{
+		Timeout:     time.Second,
+		Method:      http.MethodGet,
+		CaptureBody: false,
+		Logf:        func(msg string, args ...any) {},
+	}
+
+	flags.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "request timeout")
 
 	verbose := false
-	flags.BoolVar(&verbose, "v", verbose, "print body and log interactions")
+	flags.BoolFunc("v", "print body and log interactions",
+		func(string) error {
+			handlerOpts := &slog.HandlerOptions{Level: slog.LevelDebug}
+			cfg.Logf = slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)).Debug
 
-	method := http.MethodGet
-	flags.StringVar(&method, "method", method, "method to call probe")
+			return nil
+		})
+
+	flags.StringVar(&cfg.Method, "method", cfg.Method, "method to call probe")
 
 	err := flags.Parse(args)
 
@@ -106,23 +119,12 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		return errors.Join(ErrProbeClientConfiguration, err)
 	}
 
-	logf := func(string, ...any) {}
-	if verbose {
-		logf = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})).Debug
-	}
+	cfg.Target = flag.Arg(0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	result, err := RunProbe(ctx, ClientConfig{
-		Target:      flags.Arg(0),
-		Method:      method,
-		Timeout:     timeout,
-		CaptureBody: verbose,
-		Logf:        logf,
-	})
+	result, err := RunProbe(ctx, cfg)
 
 	switch {
 	case err == nil:
