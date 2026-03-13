@@ -43,7 +43,7 @@ func Main() {
 	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
 	err := runCmd(flags, os.Args[1:])
 
-	if errors.Is(err, ErrProbeClientConfiguration) {
+	if errors.Is(err, ErrClientProbeConfiguration) {
 		fmt.Fprintf(os.Stderr, "CONFGIRATION ERROR: %v\n", err)
 		os.Exit(2)
 	}
@@ -57,12 +57,12 @@ func Main() {
 }
 
 var (
-	// ErrBadStatus reports that the probe request completed successfully at the
+	// ErrClientProbeBadStatus reports that the probe request completed successfully at the
 	// transport level, but the HTTP response status code was not accepted.
 	//
 	// RunProbe currently accepts only 200 OK and 204 No Content as successful probe
 	// responses.
-	ErrBadStatus = errors.New("bad status on probe")
+	ErrClientProbeBadStatus = errors.New("bad status on probe")
 
 	// ErrTargetIsNotLoopBack reports that the target hostname resolved to one or
 	// more non-loopback IP addresses.
@@ -72,7 +72,7 @@ var (
 	ErrTargetIsNotLoopBack = errors.New("target host must resolve only to loopback addresses")
 
 	// ErrConfiguration means probe client misconfigured.
-	ErrProbeClientConfiguration = errors.New("probe client misconfigured")
+	ErrClientProbeConfiguration = errors.New("probe client misconfigured")
 
 	errBadScheme             = errors.New("bad target scheme")
 	errBadHost               = errors.New("bad target host")
@@ -108,7 +108,7 @@ func runCmd(flags *flag.FlagSet, args []string) error {
 	}
 
 	if err != nil {
-		return errors.Join(ErrProbeClientConfiguration, err)
+		return errors.Join(ErrClientProbeConfiguration, err)
 	}
 
 	cfg.Target = flags.Arg(0)
@@ -121,7 +121,7 @@ func runCmd(flags *flag.FlagSet, args []string) error {
 	switch {
 	case err == nil:
 		fmt.Println("OK")
-	case errors.Is(err, ErrBadStatus):
+	case errors.Is(err, ErrClientProbeBadStatus):
 		fmt.Println("FAIL")
 	default:
 		return err
@@ -232,7 +232,7 @@ func RunProbe(ctx context.Context, cfg ClientConfig) (ProbeResult, error) {
 	ok := result.StatusCode == http.StatusOK ||
 		result.StatusCode == http.StatusNoContent
 	if !ok {
-		return result, fmt.Errorf("%w: %d %s", ErrBadStatus, result.StatusCode, result.Status)
+		return result, fmt.Errorf("%w: %d %s", ErrClientProbeBadStatus, result.StatusCode, result.Status)
 	}
 
 	return result, nil
@@ -259,18 +259,18 @@ func withProbeConfigDefaults(cfg ClientConfig) ClientConfig {
 func parseProbeTarget(target string) (*url.URL, uint16, error) {
 	targetURL, err := url.Parse(target)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%w, invalid target URL %q: %w", ErrProbeClientConfiguration, target, err)
+		return nil, 0, fmt.Errorf("%w, invalid target URL %q: %w", ErrClientProbeConfiguration, target, err)
 	}
 	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
-		return nil, 0, fmt.Errorf("%w, %w: only http and https are supported, got %q", ErrProbeClientConfiguration, errBadScheme, targetURL.Scheme)
+		return nil, 0, fmt.Errorf("%w, %w: only http and https are supported, got %q", ErrClientProbeConfiguration, errBadScheme, targetURL.Scheme)
 	}
 	if targetURL.Hostname() == "" {
-		return nil, 0, fmt.Errorf("%w, %w: empty host", ErrProbeClientConfiguration, errBadHost)
+		return nil, 0, fmt.Errorf("%w, %w: empty host", ErrClientProbeConfiguration, errBadHost)
 	}
 
 	targetPort, err := strconv.ParseUint(targetURL.Port(), 10, 16)
 	if err != nil && targetURL.Port() != "" {
-		return nil, 0, fmt.Errorf("%w, %w %q: %w", ErrProbeClientConfiguration, errBadPort, targetURL.Port(), err)
+		return nil, 0, fmt.Errorf("%w, %w %q: %w", ErrClientProbeConfiguration, errBadPort, targetURL.Port(), err)
 	}
 	if targetPort == 0 && targetURL.Port() == "" {
 		targetPort = 80
@@ -279,7 +279,7 @@ func parseProbeTarget(target string) (*url.URL, uint16, error) {
 		}
 	}
 	if targetPort == 0 || targetPort > math.MaxUint16 {
-		return nil, 0, fmt.Errorf("%w, %w: %d is not allowed", ErrProbeClientConfiguration, errBadPort, targetPort)
+		return nil, 0, fmt.Errorf("%w, %w: %d is not allowed", ErrClientProbeConfiguration, errBadPort, targetPort)
 	}
 
 	return targetURL, uint16(targetPort), nil

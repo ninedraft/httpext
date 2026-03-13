@@ -63,7 +63,7 @@ func TestCmd_internal(t *testing.T) {
 	t.Logf("output: %s", got)
 	assertExitCode(t, err, 1)
 	assertOutputContains(t, got, "FAIL")
-	assertOutputContains(t, got, probes.ErrBadStatus.Error())
+	assertOutputContains(t, got, probes.ErrClientProbeBadStatus.Error())
 }
 
 func TestCmd_uknown_flag(t *testing.T) {
@@ -294,7 +294,7 @@ func TestRunProbe_configuration_validation(t *testing.T) {
 				Target: test.target,
 			})
 
-			if !errors.Is(err, probes.ErrProbeClientConfiguration) {
+			if !errors.Is(err, probes.ErrClientProbeConfiguration) {
 				t.Fatalf("want ErrProbeClientConfiguration, got: %v", err)
 			}
 			if !strings.Contains(err.Error(), test.wantErr) {
@@ -342,7 +342,7 @@ func TestRunProbe_bad_status_returns_result(t *testing.T) {
 		Target:      server.URL,
 		CaptureBody: true,
 	})
-	if !errors.Is(err, probes.ErrBadStatus) {
+	if !errors.Is(err, probes.ErrClientProbeBadStatus) {
 		t.Fatalf("want ErrBadStatus, got: %v", err)
 	}
 
