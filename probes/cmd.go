@@ -18,6 +18,7 @@ import (
 	"time"
 )
 
+// DefaultProbeTarget is the default probe URL used when ClientConfig.Target is empty.
 const DefaultProbeTarget = "http://localhost:9090"
 
 // Main runs the probe CLI using the current process arguments.
@@ -41,10 +42,10 @@ const DefaultProbeTarget = "http://localhost:9090"
 //	}
 func Main() {
 	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
-	err := runCmd(flags, os.Args[1:])
+	err := runCLICmd(flags, os.Args[1:])
 
 	if errors.Is(err, ErrClientProbeConfiguration) {
-		fmt.Fprintf(os.Stderr, "CONFGIRATION ERROR: %v\n", err)
+		fmt.Fprintf(os.Stderr, "CONFIGURATION ERROR: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -71,7 +72,7 @@ var (
 	// loopback addresses.
 	ErrTargetIsNotLoopBack = errors.New("target host must resolve only to loopback addresses")
 
-	// ErrConfiguration means probe client misconfigured.
+	// ErrClientProbeConfiguration reports invalid probe client configuration.
 	ErrClientProbeConfiguration = errors.New("probe client misconfigured")
 
 	errBadScheme             = errors.New("bad target scheme")
@@ -80,7 +81,7 @@ var (
 	errRedirectsAreForbidden = errors.New("redirects are forbidden for HTTP probes")
 )
 
-func runCmd(flags *flag.FlagSet, args []string) error {
+func runCLICmd(flags *flag.FlagSet, args []string) error {
 	cfg := ClientConfig{
 		Timeout:     time.Second,
 		Method:      http.MethodGet,
@@ -89,17 +90,10 @@ func runCmd(flags *flag.FlagSet, args []string) error {
 	}
 
 	flags.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "request timeout")
+	flags.StringVar(&cfg.Method, "method", cfg.Method, "method to call probe")
 
 	verbose := false
-	flags.BoolFunc("v", "print body and log interactions",
-		func(string) error {
-			handlerOpts := &slog.HandlerOptions{Level: slog.LevelDebug}
-			cfg.Logf = slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)).Debug
-
-			return nil
-		})
-
-	flags.StringVar(&cfg.Method, "method", cfg.Method, "method to call probe")
+	flags.BoolVar(&verbose, "v", verbose, "print body and log interactions")
 
 	err := flags.Parse(args)
 
@@ -111,12 +105,15 @@ func runCmd(flags *flag.FlagSet, args []string) error {
 		return errors.Join(ErrClientProbeConfiguration, err)
 	}
 
+	if verbose {
+		cfg.CaptureBody = true
+		handlerOpts := &slog.HandlerOptions{Level: slog.LevelDebug}
+		cfg.Logf = slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)).Debug
+	}
+
 	cfg.Target = flags.Arg(0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-	defer cancel()
-
-	result, err := RunProbe(ctx, cfg)
+	result, err := RunProbe(context.Background(), cfg)
 
 	switch {
 	case err == nil:
