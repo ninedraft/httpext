@@ -1,10 +1,13 @@
 package probes_test
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ninedraft/httpext"
 	"github.com/ninedraft/httpext/probes"
@@ -21,39 +25,192 @@ import (
 const envCmd = "GO_WANT_HELPER_PROCESS"
 
 func TestCmd_success(t *testing.T) {
+	t.Parallel()
+
 	target := prepareServer(t)
 
 	got, err := runCmd(t, target)
 	if err != nil {
 		t.Fatal("calling cmd result:", err)
 	}
+	assertOutputContains(t, got, "OK")
 
 	t.Log("got", got)
 }
 
 func TestCmd_timeout(t *testing.T) {
+	t.Parallel()
+
 	target := prepareServer(t, "sleep")
 
 	got, err := runCmd(t, "-timeout=50ms", target)
 
 	t.Logf("output: %s", got)
 	assertExitCode(t, err, 1)
+	assertOutputContains(t, got,
+		"timeout awaiting response headers",
+		"context deadline exceeded",
+	)
 }
 
 func TestCmd_internal(t *testing.T) {
+	t.Parallel()
+
 	target := prepareServer(t, "internal_error")
 
 	got, err := runCmd(t, target)
 
 	t.Logf("output: %s", got)
 	assertExitCode(t, err, 1)
+	assertOutputContains(t, got, "FAIL")
+	assertOutputContains(t, got, probes.ErrBadStatus.Error())
 }
 
 func TestCmd_uknown_flag(t *testing.T) {
+	t.Parallel()
+
 	got, err := runCmd(t, "-uknown-flag")
 
 	t.Logf("output: %s", got)
 	assertExitCode(t, err, 2)
+	assertOutputContains(t, got, "CONFGIRATION ERROR")
+}
+
+func TestCmd_help(t *testing.T) {
+	t.Parallel()
+
+	for _, arg := range []string{"-h", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := runCmd(t, arg)
+
+			t.Logf("output: %s", got)
+			assertExitCode(t, err, 0)
+			assertOutputContains(t, got, "Usage of probe:")
+		})
+	}
+}
+
+func TestCmd_configuration_validation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		target      string
+		wantInOutpt string
+	}{
+		{
+			name:        "bad scheme",
+			target:      "ftp://localhost:9090",
+			wantInOutpt: "bad target scheme",
+		},
+		{
+			name:        "empty host",
+			target:      "http:///path",
+			wantInOutpt: "empty host",
+		},
+		{
+			name:        "bad port",
+			target:      "http://localhost:abc",
+			wantInOutpt: "invalid target URL",
+		},
+		{
+			name:        "port zero",
+			target:      "http://localhost:0",
+			wantInOutpt: "bad target port",
+		},
+		{
+			name:        "port out of range",
+			target:      "http://localhost:65536",
+			wantInOutpt: "bad target port",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := runCmd(t, test.target)
+
+			t.Logf("output: %s", got)
+			assertExitCode(t, err, 2)
+			assertOutputContains(t, got, "CONFGIRATION ERROR")
+			assertOutputContains(t, got, test.wantInOutpt)
+		})
+	}
+}
+
+func TestCmd_non_loopback_target_rejected(t *testing.T) {
+	t.Parallel()
+
+	got, err := runCmd(t, "http://1.1.1.1:80")
+
+	t.Logf("output: %s", got)
+	assertExitCode(t, err, 1)
+	assertOutputContains(t, got, probes.ErrTargetIsNotLoopBack.Error())
+}
+
+func TestCmd_redirect_forbidden(t *testing.T) {
+	t.Parallel()
+
+	target := prepareServer(t, "redirect")
+
+	got, err := runCmd(t, target)
+
+	t.Logf("output: %s", got)
+	assertExitCode(t, err, 1)
+	assertOutputContains(t, got, "redirects are forbidden for HTTP probes")
+}
+
+func TestCmd_no_content_is_success(t *testing.T) {
+	t.Parallel()
+
+	target := prepareServer(t, "no_content")
+
+	got, err := runCmd(t, target)
+	if err != nil {
+		t.Fatalf("calling cmd result: %v\noutput: %s", err, got)
+	}
+
+	t.Logf("output: %s", got)
+	assertOutputContains(t, got, "OK")
+}
+
+func TestCmd_post_method(t *testing.T) {
+	t.Parallel()
+
+	target := prepareServer(t, "expect_post")
+
+	got, err := runCmd(t, "-method=POST", target)
+	if err != nil {
+		t.Fatalf("calling cmd result: %v\noutput: %s", err, got)
+	}
+
+	t.Logf("output: %s", got)
+	assertOutputContains(t, got, "OK")
+}
+
+func TestCmd_default_target(t *testing.T) {
+	t.Parallel()
+
+	var called atomic.Bool
+	serveDefaultTarget(t, http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		called.Store(true)
+		rw.WriteHeader(http.StatusNoContent)
+	}))
+
+	got, err := runCmd(t, "-v", "-timeout=150ms")
+	if err != nil {
+		t.Fatalf("calling cmd result: %v\noutput: %s", err, got)
+	}
+
+	t.Logf("output: %s", got)
+	if !called.Load() {
+		t.Fatal("expected default target server to be called")
+	}
+	assertOutputContains(t, got, "got empty target, selecting default")
+	assertOutputContains(t, got, "OK")
 }
 
 func TestCmdRun(t *testing.T) {
@@ -91,6 +248,22 @@ func prepareServer(t *testing.T, params ...string) string {
 
 		if q.Get("internal_error") != "" {
 			httpext.Error(rw, http.StatusInternalServerError)
+			return
+		}
+
+		if q.Get("redirect") != "" {
+			http.Redirect(rw, req, "/redirected", http.StatusFound)
+			return
+		}
+
+		if q.Get("no_content") != "" {
+			rw.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		if q.Get("expect_post") != "" && req.Method != http.MethodPost {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
+			return
 		}
 	}
 
@@ -135,14 +308,70 @@ func runCmd(t *testing.T, args ...string) (string, error) {
 func assertExitCode(t *testing.T, err error, exitCode int) {
 	t.Helper()
 
+	if exitCode == 0 {
+		if err != nil {
+			t.Fatalf("want exit code %d, got error %v", exitCode, err)
+		}
+
+		return
+	}
+
+	if err == nil {
+		t.Fatalf("want exit code %d, got nil error", exitCode)
+	}
+
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
-		return
+		t.Fatalf("want *exec.ExitError, got %T: %v", err, err)
 	}
 
 	got := exitErr.ExitCode()
 	if got != exitCode {
 		t.Errorf("want exit code %d", exitCode)
 		t.Errorf(" got exit code %d", got)
+	}
+}
+
+func assertOutputContains(t *testing.T, got string, want ...string) {
+	t.Helper()
+
+	for _, candidate := range want {
+		if strings.Contains(got, candidate) {
+			return
+		}
+	}
+
+	t.Fatalf("want output to contain one of %q, got:\n%s", want, got)
+}
+
+func serveDefaultTarget(t *testing.T, handler http.Handler) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", "localhost")
+	if err != nil {
+		t.Skipf("unable to resolve localhost: %v", err)
+	}
+	if len(addrs) == 0 {
+		t.Skip("localhost resolver returned no addresses")
+	}
+
+	hosts := make(map[netip.Addr]struct{}, len(addrs))
+	for _, addr := range addrs {
+		hosts[addr.Unmap()] = struct{}{}
+	}
+
+	for host := range hosts {
+		listener, err := net.Listen("tcp", netip.AddrPortFrom(host, 9090).String())
+		if err != nil {
+			t.Skipf("unable to bind %s:9090: %v", host, err)
+		}
+
+		server := httptest.NewUnstartedServer(handler)
+		server.Listener = listener
+		server.Start()
+		t.Cleanup(server.Close)
 	}
 }
