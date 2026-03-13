@@ -62,7 +62,8 @@ func TestCmdRun(t *testing.T) {
 	}
 
 	if i := slices.Index(os.Args, "--"); i > 0 {
-		os.Args = os.Args[i+1:]
+		// drop -test.run=TestCmdRun -- part
+		os.Args = slices.Delete(os.Args, 1, i+1)
 	}
 
 	probes.Main()
