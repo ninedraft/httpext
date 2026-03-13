@@ -50,14 +50,14 @@ var (
 	// ErrBadStatus reports that the probe request completed successfully at the
 	// transport level, but the HTTP response status code was not accepted.
 	//
-	// Cmd currently accepts only 200 OK and 204 No Content as successful probe
+	// RunProbe currently accepts only 200 OK and 204 No Content as successful probe
 	// responses.
 	ErrBadStatus = errors.New("bad status on probe")
 
 	// ErrTargetIsNotLoopBack reports that the target hostname resolved to one or
 	// more non-loopback IP addresses.
 	//
-	// Cmd allows requests only to targets whose resolved addresses are all
+	// RunProbe allows requests only to targets whose resolved addresses are all
 	// loopback addresses.
 	ErrTargetIsNotLoopBack = errors.New("target host must resolve only to loopback addresses")
 
@@ -71,20 +71,6 @@ var (
 )
 
 // Cmd runs the HTTP probe command.
-//
-// Cmd defines probe-specific flags on flags, parses args, validates the target,
-// resolves the target host, verifies that all resolved addresses are loopback,
-// and performs the HTTP request using a transport pinned to those resolved
-// loopback addresses.
-//
-// Security properties:
-//   - only http and https targets are accepted
-//   - redirects are rejected
-//   - proxies are disabled
-//   - the target host must resolve only to loopback addresses
-//   - the actual TCP dial is pinned to the resolved loopback IPs
-//
-// If args does not contain a target URL, Cmd uses http://localhost:9090.
 //
 // The provided FlagSet must be fresh and not yet parsed, because Cmd registers
 // its own flags on it and then parses args.
@@ -120,140 +106,249 @@ func Cmd(flags *flag.FlagSet, args []string) error {
 		return errors.Join(ErrProbeClientConfiguration, err)
 	}
 
-	log := func(string, ...any) {}
+	logf := func(string, ...any) {}
 	if verbose {
-		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		logf = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		})).Debug
 	}
 
-	target := flags.Arg(0)
-	if target == "" {
-		target = "http://localhost:9090"
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-		log("got empty target, selecting default", "target", target)
+	result, err := RunProbe(ctx, ClientConfig{
+		Target:      flags.Arg(0),
+		Method:      method,
+		Timeout:     timeout,
+		CaptureBody: verbose,
+		Logf:        logf,
+	})
+
+	switch {
+	case err == nil:
+		fmt.Println("OK")
+	case errors.Is(err, ErrBadStatus):
+		fmt.Println("FAIL")
+	default:
+		return err
 	}
 
+	if verbose {
+		fmt.Println("RESPONSE:")
+		_, _ = os.Stdout.Write(result.Body)
+		fmt.Println()
+	}
+
+	return err
+}
+
+// ClientConfig configures RunProbe behavior.
+type ClientConfig struct {
+	// Target is the probe URL.
+	// If empty, RunProbe uses http://localhost:9090.
+	Target string
+
+	// Method is the HTTP request method.
+	// If empty, RunProbe uses GET.
+	Method string
+
+	// Timeout is used for transport-level timeouts and HTTP client timeout.
+	// If zero or negative, RunProbe uses 1 second.
+	Timeout time.Duration
+
+	// CaptureBody enables reading response body into ProbeResult.Body.
+	CaptureBody bool
+
+	// Logf receives debug log events.
+	// If nil, logging is disabled.
+	Logf func(msg string, args ...any)
+}
+
+// ProbeResult is the HTTP result of RunProbe.
+type ProbeResult struct {
+	StatusCode int
+	Status     string
+	Body       []byte
+}
+
+// RunProbe executes a single HTTP probe request.
+//
+// Security properties:
+//   - only http and https targets are accepted
+//   - redirects are rejected
+//   - proxies are disabled
+//   - the target host must resolve only to loopback addresses
+//   - the actual TCP dial is pinned to the resolved loopback IPs
+//
+// For response status 200 OK and 204 No Content, RunProbe returns nil error.
+// For any other response status, RunProbe returns ErrBadStatus and a populated
+// ProbeResult.
+func RunProbe(ctx context.Context, cfg ClientConfig) (ProbeResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cfg = withProbeConfigDefaults(cfg)
+
+	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+
+	targetURL, targetPort, err := parseProbeTarget(cfg.Target)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+
+	hostAddresses, err := resolveProbeTargetAddresses(ctx, targetURL.Hostname(), cfg.Logf)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+
+	client := newProbeClient(cfg.Timeout, hostAddresses, targetPort, cfg.Logf)
+
+	req, err := http.NewRequestWithContext(ctx, cfg.Method, cfg.Target, nil)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("preparing request: %w", err)
+	}
+
+	cfg.Logf("doing request", "method", cfg.Method, "target", cfg.Target)
+	resp, err := client.Do(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("making request %s %q: %w", cfg.Method, req.URL, err)
+	}
+
+	cfg.Logf("got response", "status", resp.Status, "status_code", resp.StatusCode)
+
+	result := ProbeResult{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+	}
+
+	if cfg.CaptureBody {
+		result.Body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return result, fmt.Errorf("reading response body: %w", err)
+		}
+	}
+
+	ok := result.StatusCode == http.StatusOK ||
+		result.StatusCode == http.StatusNoContent
+	if !ok {
+		return result, fmt.Errorf("%w: %d %s", ErrBadStatus, result.StatusCode, result.Status)
+	}
+
+	return result, nil
+}
+
+func withProbeConfigDefaults(cfg ClientConfig) ClientConfig {
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
+	}
+	if cfg.Target == "" {
+		cfg.Target = "http://localhost:9090"
+		cfg.Logf("got empty target, selecting default", "target", cfg.Target)
+	}
+	if cfg.Method == "" {
+		cfg.Method = http.MethodGet
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = time.Second
+	}
+
+	return cfg
+}
+
+func parseProbeTarget(target string) (*url.URL, uint16, error) {
 	targetURL, err := url.Parse(target)
 	if err != nil {
-		return fmt.Errorf("%w, invalid target URL %q: %w", ErrProbeClientConfiguration, target, err)
+		return nil, 0, fmt.Errorf("%w, invalid target URL %q: %w", ErrProbeClientConfiguration, target, err)
 	}
 	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
-		return fmt.Errorf("%w, %w: only http and https are supported, got %q", ErrProbeClientConfiguration, errBadScheme, targetURL.Scheme)
+		return nil, 0, fmt.Errorf("%w, %w: only http and https are supported, got %q", ErrProbeClientConfiguration, errBadScheme, targetURL.Scheme)
 	}
 	if targetURL.Hostname() == "" {
-		return fmt.Errorf("%w, %w: empty host", ErrProbeClientConfiguration, errBadHost)
+		return nil, 0, fmt.Errorf("%w, %w: empty host", ErrProbeClientConfiguration, errBadHost)
 	}
 
 	targetPort, err := strconv.ParseUint(targetURL.Port(), 10, 16)
 	if err != nil && targetURL.Port() != "" {
-		return fmt.Errorf("%w, %w %q: %w", ErrProbeClientConfiguration, errBadPort, targetURL.Port(), err)
+		return nil, 0, fmt.Errorf("%w, %w %q: %w", ErrProbeClientConfiguration, errBadPort, targetURL.Port(), err)
 	}
-
 	if targetPort == 0 && targetURL.Port() == "" {
 		targetPort = 80
 		if targetURL.Scheme == "https" {
 			targetPort = 443
 		}
 	}
-
 	if targetPort == 0 || targetPort > math.MaxUint16 {
-		return fmt.Errorf("%w, %w: %d is not allowed", ErrProbeClientConfiguration, errBadPort, targetPort)
+		return nil, 0, fmt.Errorf("%w, %w: %d is not allowed", ErrProbeClientConfiguration, errBadPort, targetPort)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	return targetURL, uint16(targetPort), nil
+}
 
-	log("resolving target hostname", "hostname", targetURL.Hostname())
-	hostAddresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", targetURL.Hostname())
+func resolveProbeTargetAddresses(ctx context.Context, hostname string, logf func(string, ...any)) ([]netip.Addr, error) {
+	logf("resolving target hostname", "hostname", hostname)
+	hostAddresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", hostname)
 	if err != nil {
-		return fmt.Errorf("unable to lookup target hostname: %w", err)
+		return nil, fmt.Errorf("unable to lookup target hostname: %w", err)
 	}
 	if len(hostAddresses) == 0 {
-		return fmt.Errorf("%w: resolver returned no addresses", errBadHost)
+		return nil, fmt.Errorf("%w: resolver returned no addresses", errBadHost)
 	}
 
-	slices.SortStableFunc(hostAddresses, netip.Addr.Compare)
+	slices.SortFunc(hostAddresses, netip.Addr.Compare)
 
-	log("checking resolved target IP addresses", "addresses", hostAddresses)
+	logf("checking resolved target IP addresses", "addresses", hostAddresses)
 	for _, addr := range hostAddresses {
 		if !addr.IsLoopback() {
-			return fmt.Errorf("%w: %q -> %q", ErrTargetIsNotLoopBack, targetURL.Hostname(), hostAddresses)
+			return nil, fmt.Errorf("%w: %q -> %q", ErrTargetIsNotLoopBack, hostname, hostAddresses)
 		}
 	}
 
+	return hostAddresses, nil
+}
+
+func newProbeClient(timeout time.Duration, hostAddresses []netip.Addr, targetPort uint16, logf func(string, ...any)) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: timeout,
 	}
 
 	transport := newTransport(timeout,
-		func(ctx context.Context) (conn net.Conn, err error) {
-			for _, addr := range hostAddresses {
-				tcpAddr := netip.AddrPortFrom(addr, uint16(targetPort))
-				log("trying to dial", "address", tcpAddr)
+		func(ctx context.Context) (net.Conn, error) {
+			var lastErr error
 
-				conn, err = dialer.DialContext(ctx, "tcp", tcpAddr.String())
+			for _, addr := range hostAddresses {
+				tcpAddr := netip.AddrPortFrom(addr, targetPort)
+				logf("trying to dial", "address", tcpAddr)
+
+				conn, err := dialer.DialContext(ctx, "tcp", tcpAddr.String())
 				if err == nil {
-					log("success!", "address", tcpAddr)
-					break
+					logf("success!", "address", tcpAddr)
+					return conn, nil
 				}
 				if errors.Is(err, context.Canceled) ||
 					errors.Is(err, context.DeadlineExceeded) {
-					log("context cancelled during dial", "err", err, "err_ctx", context.Cause(ctx))
+					logf("context cancelled during dial", "err", err, "err_ctx", context.Cause(ctx))
 					return nil, err
 				}
-				log("unable to dial, trying next", "error", err)
+
+				lastErr = err
+				logf("unable to dial, trying next", "error", err)
 			}
 
-			return conn, err
+			return nil, lastErr
 		})
 
-	client := &http.Client{
+	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errRedirectsAreForbidden
 		},
 	}
-
-	req, err := http.NewRequestWithContext(ctx, method, target, nil)
-	if err != nil {
-		return fmt.Errorf("preparing request: %w", err)
-	}
-
-	log("doing request", "method", method, "target", target)
-	resp, err := client.Do(req)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
-
-	if err != nil {
-		return fmt.Errorf("making request %s %q: %w", method, req.URL, err)
-	}
-
-	log("got response", "status", resp.Status, "status_code", resp.StatusCode)
-
-	ok := resp.StatusCode == http.StatusOK ||
-		resp.StatusCode == http.StatusNoContent
-
-	switch {
-	case ok:
-		fmt.Println("OK")
-	default:
-		fmt.Println("FAIL")
-	}
-
-	if verbose {
-		fmt.Println("RESPONSE:")
-		_, _ = io.Copy(os.Stdout, resp.Body)
-		fmt.Println()
-	}
-
-	if !ok {
-		return fmt.Errorf("%w: %d %s", ErrBadStatus, resp.StatusCode, resp.Status)
-	}
-
-	return nil
 }
 
 func newTransport(timeout time.Duration, dial func(ctx context.Context) (net.Conn, error)) *http.Transport {

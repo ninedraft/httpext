@@ -213,6 +213,181 @@ func TestCmd_default_target(t *testing.T) {
 	assertOutputContains(t, got, "OK")
 }
 
+func TestRunProbe_success(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		target         string
+		wantStatusCode int
+	}{
+		{
+			name:           "status ok",
+			target:         prepareServer(t),
+			wantStatusCode: http.StatusOK,
+		},
+		{
+			name:           "status no content",
+			target:         prepareServer(t, "no_content"),
+			wantStatusCode: http.StatusNoContent,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+				Target: test.target,
+			})
+			if err != nil {
+				t.Fatalf("calling RunProbe: %v", err)
+			}
+
+			if result.StatusCode != test.wantStatusCode {
+				t.Fatalf("want status code %d, got %d", test.wantStatusCode, result.StatusCode)
+			}
+		})
+	}
+}
+
+func TestRunProbe_configuration_validation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		target  string
+		wantErr string
+	}{
+		{
+			name:    "bad scheme",
+			target:  "ftp://localhost:9090",
+			wantErr: "bad target scheme",
+		},
+		{
+			name:    "empty host",
+			target:  "http:///path",
+			wantErr: "empty host",
+		},
+		{
+			name:    "bad port",
+			target:  "http://localhost:abc",
+			wantErr: "invalid target URL",
+		},
+		{
+			name:    "port zero",
+			target:  "http://localhost:0",
+			wantErr: "bad target port",
+		},
+		{
+			name:    "port out of range",
+			target:  "http://localhost:65536",
+			wantErr: "bad target port",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+				Target: test.target,
+			})
+
+			if !errors.Is(err, probes.ErrProbeClientConfiguration) {
+				t.Fatalf("want ErrProbeClientConfiguration, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("want %q in error, got: %v", test.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestRunProbe_non_loopback_target_rejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+		Target: "http://1.1.1.1:80",
+	})
+	if !errors.Is(err, probes.ErrTargetIsNotLoopBack) {
+		t.Fatalf("want ErrTargetIsNotLoopBack, got: %v", err)
+	}
+}
+
+func TestRunProbe_redirect_forbidden(t *testing.T) {
+	t.Parallel()
+
+	_, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+		Target: prepareServer(t, "redirect"),
+	})
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "redirects are forbidden for HTTP probes") {
+		t.Fatalf("want redirect error, got: %v", err)
+	}
+}
+
+func TestRunProbe_bad_status_returns_result(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusInternalServerError)
+		_, _ = rw.Write([]byte("boom"))
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+		Target:      server.URL,
+		CaptureBody: true,
+	})
+	if !errors.Is(err, probes.ErrBadStatus) {
+		t.Fatalf("want ErrBadStatus, got: %v", err)
+	}
+
+	if result.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("want status %d, got %d", http.StatusInternalServerError, result.StatusCode)
+	}
+	if result.Status != "500 Internal Server Error" {
+		t.Fatalf("want status text %q, got %q", "500 Internal Server Error", result.Status)
+	}
+	if string(result.Body) != "boom" {
+		t.Fatalf("want body %q, got %q", "boom", string(result.Body))
+	}
+}
+
+func TestRunProbe_capture_body_toggle(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		_, _ = rw.Write([]byte("healthy"))
+	}))
+	t.Cleanup(server.Close)
+
+	withBody, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+		Target:      server.URL,
+		CaptureBody: true,
+	})
+	if err != nil {
+		t.Fatalf("capture body enabled: %v", err)
+	}
+	if string(withBody.Body) != "healthy" {
+		t.Fatalf("want body %q, got %q", "healthy", string(withBody.Body))
+	}
+
+	withoutBody, err := probes.RunProbe(t.Context(), probes.ClientConfig{
+		Target:      server.URL,
+		CaptureBody: false,
+	})
+	if err != nil {
+		t.Fatalf("capture body disabled: %v", err)
+	}
+	if len(withoutBody.Body) != 0 {
+		t.Fatalf("want empty body, got %q", string(withoutBody.Body))
+	}
+}
+
 func TestCmdRun(t *testing.T) {
 	if os.Getenv(envCmd) != "1" {
 		return
