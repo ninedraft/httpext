@@ -40,7 +40,7 @@ func Readiness() *Probe {
 	}
 }
 
-// Component returns a setter function, which 
+// Component returns a setter function, which
 func (probe *Probe) Component(name string) func(ok bool) {
 	probe.mu.Lock()
 	defer probe.mu.Unlock()
@@ -164,8 +164,11 @@ func New(addr string) *Server {
 	health := Health()
 	readiness := Readiness()
 
-	mux.Handle("GET,HEAD /probes/health", health)
-	mux.Handle("GET,HEAD /probes/ready", readiness)
+	mux.Handle("GET /probes/health", health)
+	mux.Handle("HEAD /probes/health", health)
+
+	mux.Handle("GET /probes/ready", readiness)
+	mux.Handle("HEAD /probes/ready", readiness)
 
 	return &Server{
 		Health:    health,
