@@ -15,27 +15,33 @@ import (
 	"github.com/ninedraft/httpext"
 )
 
-type probe struct {
+// Probe is a simple collection of (name, bool) pairs.
+// It serves 200 Ok if all bools are true, else false.
+// It has name, which is accessible via http response.
+type Probe struct {
 	name       string
 	mu         sync.RWMutex
 	components map[string]*atomic.Bool
 }
 
-func Health() *probe {
-	return &probe{
+// Health constructs a probe named "health".
+func Health() *Probe {
+	return &Probe{
 		name:       "health",
 		components: map[string]*atomic.Bool{},
 	}
 }
 
-func Readiness() *probe {
-	return &probe{
-		name:       "readiness",
+// Health constructs a probe named "ready".
+func Readiness() *Probe {
+	return &Probe{
+		name:       "ready",
 		components: map[string]*atomic.Bool{},
 	}
 }
 
-func (probe *probe) Component(name string) func(ok bool) {
+// Component returns a setter function, which 
+func (probe *Probe) Component(name string) func(ok bool) {
 	probe.mu.Lock()
 	defer probe.mu.Unlock()
 
@@ -49,7 +55,7 @@ func (probe *probe) Component(name string) func(ok bool) {
 	return ok.Store
 }
 
-func (probe *probe) String() string {
+func (probe *Probe) String() string {
 	str := &strings.Builder{}
 
 	probe.snapshot().formatString(str)
@@ -57,7 +63,7 @@ func (probe *probe) String() string {
 	return str.String()
 }
 
-func (probe *probe) snapshot() *probeSnapshot {
+func (probe *Probe) snapshot() *probeSnapshot {
 	probe.mu.RLock()
 	defer probe.mu.RUnlock()
 
@@ -98,12 +104,21 @@ func (snap *probeSnapshot) formatJSON(dst io.Writer) {
 	_ = json.NewEncoder(dst).Encode(snap)
 }
 
-func (probe *probe) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+func (probe *Probe) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	switch req.Method {
+	case http.MethodGet, http.MethodHead:
+	default:
+		rw.Header().Set("Allow", "GET, HEAD")
+		httpext.Error(rw, http.StatusMethodNotAllowed)
+		return
+	}
+
 	snap := probe.snapshot()
 
 	acceptsJSON := strings.Contains(
 		strings.ToLower(req.Header.Get("Accept")),
-		"application/json")
+		"application/json",
+	)
 
 	status := http.StatusOK
 	if !snap.Ok {
@@ -111,7 +126,6 @@ func (probe *probe) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	format, contentType := snap.formatString, "text/plain; charset=utf-8"
-
 	if acceptsJSON {
 		format = snap.formatJSON
 		contentType = "application/json; charset=utf-8"
@@ -119,10 +133,23 @@ func (probe *probe) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	rw.Header().Set("Content-Type", contentType)
 	rw.WriteHeader(status)
+
+	if req.Method == http.MethodHead {
+		return
+	}
+
 	format(rw)
 }
 
-func Server(addr string) (*http.Server, *httpext.Mux) {
+type Server struct {
+	Health    *Probe
+	Readiness *Probe
+	*http.Server
+}
+
+// Server configures an simple probe server with good defaults.
+// Returned server is unstarted.
+func New(addr string) *Server {
 	const timeout = time.Second
 
 	if addr == "" {
@@ -134,12 +161,22 @@ func Server(addr string) (*http.Server, *httpext.Mux) {
 		httpext.Timeout(timeout, "probing timeout"),
 	)
 
-	return &http.Server{
-		Addr:              addr,
-		MaxHeaderBytes:    1024,
-		ReadHeaderTimeout: timeout,
-		ReadTimeout:       timeout,
-		WriteTimeout:      timeout,
-		Handler:           mux,
-	}, mux
+	health := Health()
+	readiness := Readiness()
+
+	mux.Handle("GET,HEAD /probes/health", health)
+	mux.Handle("GET,HEAD /probes/ready", readiness)
+
+	return &Server{
+		Health:    health,
+		Readiness: readiness,
+		Server: &http.Server{
+			Addr:              addr,
+			MaxHeaderBytes:    1024,
+			ReadHeaderTimeout: timeout,
+			ReadTimeout:       timeout,
+			WriteTimeout:      timeout,
+			Handler:           mux,
+		},
+	}
 }

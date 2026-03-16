@@ -10,8 +10,7 @@ func ExampleHealth() {
 	dbOk := health.Component("db")
 	dbOk(true)
 
-	probeServer, probeMux := probes.Server(":9090")
-	probeMux.Handle("/health", health)
+	probeServer := probes.New(":9090")
 
 	_ = probeServer.ListenAndServe
 }
